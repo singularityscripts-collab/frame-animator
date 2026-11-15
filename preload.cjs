@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld('api', {
   exportEnd: (id) => ipcRenderer.invoke('export:end', id),
   exportCancel: (id) => ipcRenderer.invoke('export:cancel', id),
   showInFolder: (p) => ipcRenderer.send('shell:show', p),
+  openImage: () => ipcRenderer.invoke('file:open-image'),
+  openVideo: () => ipcRenderer.invoke('file:open-video'),
+  openAnimate: () => ipcRenderer.invoke('file:open-animate'),
+  exportWrite: (o) => ipcRenderer.invoke('export:write', o),
+  exportHTML5: (o) => ipcRenderer.invoke('export:html5', o),
+  setKeys: (map) => ipcRenderer.send('keys:set', map),
   onMenuAction: (fn) => ipcRenderer.on('menu:action', (_e, id) => fn(id)),
   onCloseRequested: (fn) => ipcRenderer.on('app:close-requested', () => fn()),
 });

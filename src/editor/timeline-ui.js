@@ -739,6 +739,21 @@ export class TimelineUI {
         ctx.fill();
       }
     }
+    // script do quadro: um "a" pequeno no topo do keyframe
+    if (s.script?.trim()) {
+      ctx.save();
+      ctx.font = 'bold 9px "Segoe UI", system-ui, sans-serif';
+      ctx.fillStyle = '#ffd60a';
+      ctx.textBaseline = 'top';
+      ctx.textAlign = 'center';
+      ctx.fillText('a', x0 + CW / 2, y + 1);
+      ctx.restore();
+    }
+    // esqueleto (ossos) no keyframe: um pontinho laranja embaixo
+    if (s.armature?.bones?.length) {
+      ctx.fillStyle = '#ff9f0a';
+      ctx.fillRect(x0 + CW / 2 - 1.5, y + RH - 5, 3, 3);
+    }
     // rótulo
     if (s.label) {
       ctx.save();

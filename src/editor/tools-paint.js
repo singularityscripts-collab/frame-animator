@@ -452,7 +452,8 @@ export function renderContentFor(stage, { withBackground = false } = {}) {
   c.height = main.height;
   const ctx = c.getContext('2d', { willReadFrequently: true });
   const v = stage.view;
-  const sceneBase = [stage.dpr * v.zoom, 0, 0, stage.dpr * v.zoom, stage.dpr * v.panX, stage.dpr * v.panY];
+  const sceneBase = stage.deviceView();
+  void v;
   const inScene = !editor.editStack.length;
   const base = multiply(sceneBase, editor.contextMatrix);
   ctx.setTransform(1, 0, 0, 1, 0, 0);

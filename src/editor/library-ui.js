@@ -3,7 +3,8 @@
 
 import { icons } from './icons.js';
 import { esc, showContextMenu, confirmDialog } from './ui-kit.js';
-import { SYMBOL_MIME } from './stage.js';
+import { SYMBOL_MIME, BITMAP_MIME } from './stage.js';
+import { getImage } from '../player/assets.js';
 import { SYMBOL_TYPES } from '../model/document.js';
 import { timelineBounds } from '../model/geometry.js';
 import { renderTimeline } from '../player/render.js';
@@ -52,6 +53,7 @@ export class LibraryUI {
     mk('newSymbol', 'Novo símbolo (Ctrl+F8)', () => actions.run('newSymbol'));
     mk('newFolder', 'Nova pasta', () => this.newFolder());
     mk('speaker', 'Importar som…', () => actions.importSound());
+    mk('image', 'Importar imagem…', () => actions.run('importImage'));
     mk('gear', 'Propriedades do símbolo', () => this.selected?.kind === 'items' && this.properties(this.selected.id));
     mk('trash', 'Apagar', () => this.selected && this.remove(this.selected.kind, this.selected.id));
 
@@ -73,6 +75,7 @@ export class LibraryUI {
           { label: 'Novo símbolo…', hint: 'Ctrl+F8', run: () => actions.run('newSymbol') },
           { label: 'Nova pasta', run: () => this.newFolder() },
           { label: 'Importar som…', run: () => actions.importSound() },
+          { label: 'Importar imagem…', run: () => actions.run('importImage') },
         ]);
       }
     });
@@ -94,19 +97,21 @@ export class LibraryUI {
     if (this.selected && !lib[this.selected.kind].some((x) => x.id === this.selected.id)) this.selected = null;
     const usage = this.editor.usage();
     for (const [id, n] of this.editor.soundUsage()) usage.set(id, n);
-    const count = lib.items.length + lib.sounds.length;
+    const count = lib.items.length + lib.sounds.length + lib.bitmaps.length;
     this.root.querySelector('.lib-count').textContent = `${count} ${count === 1 ? 'item' : 'itens'}`;
     this.list.innerHTML = '';
 
-    if (!lib.items.length && !lib.folders.length && !lib.sounds.length) {
+    if (!lib.items.length && !lib.folders.length && !lib.sounds.length && !lib.bitmaps.length) {
       this.list.innerHTML = `<div class="lib-empty">A biblioteca está vazia.<br>Selecione algo no palco e aperte <span class="kbd">F8</span> para criar um símbolo.</div>`;
     } else if (this.query) {
       const q = norm(this.query);
       const hits = lib.items.filter((s) => norm(s.name).includes(q)).sort((a, b) => a.name.localeCompare(b.name));
       const sounds = lib.sounds.filter((s) => norm(s.name).includes(q));
-      if (!hits.length && !sounds.length) this.list.innerHTML = `<div class="lib-empty">Nada encontrado.</div>`;
+      const bmps = lib.bitmaps.filter((s) => norm(s.name).includes(q));
+      if (!hits.length && !sounds.length && !bmps.length) this.list.innerHTML = `<div class="lib-empty">Nada encontrado.</div>`;
       for (const s of hits) this.list.appendChild(this.itemRow(s, 0, usage));
       for (const s of sounds) this.list.appendChild(this.soundRow(s, 0, usage));
+      for (const b of bmps) this.list.appendChild(this.bitmapRow(b, 0, usage));
     } else {
       this.renderFolder(null, 0, usage);
     }
@@ -124,6 +129,8 @@ export class LibraryUI {
     for (const s of items) this.list.appendChild(this.itemRow(s, depth, usage));
     const sounds = lib.sounds.filter((s) => (s.folderId || null) === parentId).sort((a, b) => a.name.localeCompare(b.name));
     for (const s of sounds) this.list.appendChild(this.soundRow(s, depth, usage));
+    const bmps = lib.bitmaps.filter((s) => (s.folderId || null) === parentId).sort((a, b) => a.name.localeCompare(b.name));
+    for (const b of bmps) this.list.appendChild(this.bitmapRow(b, depth, usage));
   }
 
   baseRow(kind, entry, depth) {
@@ -142,6 +149,7 @@ export class LibraryUI {
     row.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData(LIB_MIME, `${kind}:${entry.id}`);
       if (kind === 'items') e.dataTransfer.setData(SYMBOL_MIME, entry.id);
+      if (kind === 'bitmaps') e.dataTransfer.setData(BITMAP_MIME, entry.id);
       e.dataTransfer.effectAllowed = 'copyMove';
     });
     return row;
@@ -231,6 +239,24 @@ export class LibraryUI {
     return row;
   }
 
+  bitmapRow(bmp, depth, usage) {
+    const row = this.baseRow('bitmaps', bmp, depth);
+    row.title = `${bmp.name} · ${bmp.w}×${bmp.h} px · arraste para o palco`;
+    row.innerHTML = `<span class="caret"></span><span class="lib-icon bmp">${icons.image}</span><span class="lib-name">${esc(bmp.name)}</span><span class="lib-uses">${usage.get(bmp.id) || 0}</span>`;
+    row.querySelector('.lib-name').addEventListener('dblclick', () => this.rename(row, 'bitmaps', bmp));
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      this.selected = { kind: 'bitmaps', id: bmp.id };
+      showContextMenu(e.clientX, e.clientY, [
+        { label: 'Pôr no palco', run: () => this.editor.placeBitmap(bmp.id, this.editor.doc.width / 2 - bmp.w / 2, this.editor.doc.height / 2 - bmp.h / 2) },
+        { label: 'Renomear', run: () => this.rename(row, 'bitmaps', bmp) },
+        '-',
+        { label: 'Apagar', run: () => this.remove('bitmaps', bmp.id) },
+      ]);
+    });
+    return row;
+  }
+
   rename(row, kind, entry) {
     const nameEl = row.querySelector('.lib-name');
     const input = document.createElement('input');
@@ -276,6 +302,11 @@ export class LibraryUI {
       const n = ed.soundUsage().get(id) || 0;
       if (n > 0 && !(await confirmDialog('Apagar som', `"${snd.name}" está em ${n} quadro(s). O som sai deles também. Dá para desfazer com Ctrl+Z.`, 'Apagar'))) return;
     }
+    if (kind === 'bitmaps') {
+      const b = ed.doc.library.bitmaps.find((x) => x.id === id);
+      const n = this.editor.usage().get(id) || 0;
+      if (n > 0 && !(await confirmDialog('Apagar imagem', `"${b.name}" está em uso ${n} vez(es). Ela sai do palco também. Dá para desfazer com Ctrl+Z.`, 'Apagar'))) return;
+    }
     if (kind === 'items') {
       const s = ed.symbol(id);
       const n = ed.usage().get(id) || 0;
@@ -302,6 +333,19 @@ export class LibraryUI {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, c.width, c.height);
     if (this.selected?.kind === 'sounds') return this.drawWave(ctx, c, dpr, w, h);
+    if (this.selected?.kind === 'bitmaps') {
+      const bmp = this.editor.doc.library.bitmaps.find((x) => x.id === this.selected.id);
+      this.previewName.textContent = bmp ? `${bmp.name} · ${bmp.w}×${bmp.h} px` : '';
+      const img = bmp && getImage(this.editor.doc, bmp.id);
+      if (!img || !img.complete) {
+        if (img) img.addEventListener('load', () => this.drawPreview(), { once: true });
+        return;
+      }
+      const s = Math.min((w - 24) / bmp.w, (h - 24) / bmp.h, 4);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.drawImage(img, (w - bmp.w * s) / 2, (h - bmp.h * s) / 2, bmp.w * s, bmp.h * s);
+      return;
+    }
     const sel = this.selected?.kind === 'items' ? this.editor.symbol(this.selected.id) : null;
     this.previewName.textContent = sel ? `${sel.name} · ${SYMBOL_TYPES[sel.type]}` : '';
     if (!sel) return;

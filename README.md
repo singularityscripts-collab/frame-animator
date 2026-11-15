@@ -11,9 +11,10 @@ npm start
 
 Outros comandos:
 
-- `npm test`: testes do modelo, timeline, desfazer, tween, símbolos, booleanos, borracha e balde (Node, sem janela).
+- `npm test`: testes do modelo, timeline, desfazer, tween, símbolos, booleanos, borracha, balde, ossos,
+  malha de pinos, importação XFL, lip-sync, vetorização, exports (Lottie, SVG, sprite sheet) e o runtime HTML5 (Node, sem janela).
 - `npm run smoke`: abre o Electron, salva um arquivo, abre a janela de teste, exporta MP4/MOV/GIF/PNG,
-  confere os arquivos com o ffmpeg e fecha sozinho.
+  confere os arquivos com o ffmpeg, gera o pacote HTML5 e clica num botão dentro dele, e fecha sozinho.
 - `npm run serve`: abre o editor no navegador em http://localhost:5178 (sem salvar em disco nem exportar vídeo).
 
 Dependências: Electron, ffmpeg-static (export de vídeo) e Paper.js (geometria).
@@ -94,6 +95,35 @@ Dependências: Electron, ffmpeg-static (export de vídeo) e Paper.js (geometria)
   evento/iniciar/parar/stream, scrub ao arrastar a agulha, repetir, volume, pan e fade in/out.
   O som vai junto no export de MP4 e MOV.
 
+## Fase 5 (pronta) — todas as funções do mapa
+
+- **Desenho:** subseleção (A) para mover pontos e alças e apagar pontos; laço livre e poligonal (L);
+  polígono e estrela (Shift+R); caneta Bézier (P) com adicionar (=), remover (-) e converter ponto
+  (Shift+C); lápis com os modos suavizar, endireitar (reconhece linha, retângulo e elipse) e tinta;
+  ferramenta de largura (U) para engrossar o traço em pontos; pincéis de arte e de padrão (o traço
+  segue um símbolo da biblioteca); transformação livre (Q) com inclinar, distorcer e envelope;
+  desenho mesclado ou de objeto (J); otimizar curvas e separar (Ctrl+B).
+- **Texto (T):** estático, dinâmico e de entrada, editado direto no palco; fontes, tamanho, cor,
+  negrito, itálico, alinhamento, espaçamento e largura fixa.
+- **Imagens:** importar (Ctrl+Alt+I, ou arrastar do sistema para o palco), biblioteca com prévia,
+  vetorizar bitmap (cores, área mínima, precisão e suavização).
+- **Palco:** réguas, guias (arrastar da régua), grade, encaixe na grade, nas guias e em objetos (com
+  linhas de alinhamento), painel Alinhar (Ctrl+K) e girar a vista (Shift+H).
+- **Símbolos:** botão com estados normal, sobre, pressionado e área de clique; seletor de quadro;
+  filtros (sombra, desfoque, brilho, chanfro, ajuste de cor); modos de mesclagem; escala de 9 fatias;
+  cache como bitmap; rotação e posição 3D de movie clips (G) com perspectiva.
+- **Rigging:** ossos (M) com cinemática inversa (cada pose vira keyframe e o tween interpola) e
+  malha de pinos (W) em formas e imagens.
+- **Lip-sync automático:** analisa a fala e troca a boca (9 visemas) criando keyframes.
+- **Interatividade:** painel Ações (F9) com JavaScript por quadro e trechos prontos; componentes
+  botão, lista e vídeo; scripts que automatizam o editor (painel Scripts, API `fa`).
+- **Exportar e publicar:** HTML5 Canvas interativo (pasta que abre direto no navegador), Lottie,
+  sprite sheet + JSON, SVG por quadro; configurações de publicação e Publicar (Shift+F12).
+- **Importar do Animate:** `.fla` e XFL (camadas, máscaras, guias, pastas, tweens, rótulos, símbolos,
+  formas, gradientes, textos, imagens, sons, filtros e ActionScript convertido para JavaScript).
+- **Interface:** painéis encaixáveis à esquerda, à direita ou flutuando, layouts salvos, atalhos
+  personalizáveis (também no menu), localizar e substituir (texto e cor) e explorador de cenas.
+
 ## Arquitetura
 
 ```
@@ -102,8 +132,10 @@ src/
   model/      documento JSON, operações puras de timeline, geometria
   editor/     estado, comandos (desfazer), palco, ferramentas, timeline e painéis
   app.js      liga tudo
-  preview.*   janela de teste (só player), base do futuro export HTML5
-main.cjs      processo principal: janela, menu, diálogos de arquivo
+  export/     exports vetoriais: achatar quadro, SVG, Lottie e sprite sheet
+  preview.*   janela de teste (o mesmo runtime do export HTML5)
+main.cjs      processo principal: janela, menu, diálogos de arquivo, leitor de .fla
+bundler.cjs   junta src/player num script só para o pacote HTML5
 preload.cjs   ponte segura entre a interface e o sistema
 ```
 
@@ -124,3 +156,13 @@ preload.cjs   ponte segura entre a interface e o sistema
 - **Balde:** `src/model/raster.js` preenche numa máscara de pixels (com fechamento de lacunas) e
   devolve os contornos, que viram uma forma vetorial.
 - **Atalhos:** todos num lugar só (`src/editor/actions.js`), usados pelo teclado, menu e botões.
+
+- **Runtime interativo:** `src/player/runtime.js` roda os scripts dos quadros, botões, componentes e
+  texto de entrada. A janela de teste e o pacote HTML5 usam o mesmo arquivo (o `bundler.cjs` junta os
+  módulos do player num script clássico, então o HTML5 abre direto do disco).
+- **Efeitos no player:** filtros, mesclagem, 3D, 9 fatias e cache em `src/player/effects.js`; ossos em
+  `bones.js`; malha de pinos (MLS) em `mesh.js`; imagens, texto e componentes em `assets.js`.
+- **Mixins do editor:** `editor.js` (núcleo), `editor-pro.js` (Fase 4) e `editor-final.js` (Fase 5)
+  acrescentam métodos ao mesmo `Editor`; as ações novas ficam em `actions-final.js`.
+- **Importar XFL:** `src/model/xml.js` lê o XML e `src/model/xfl.js` converte; as arestas do Animate
+  (em twips, às vezes em hex) viram laços de preenchimento e traços.

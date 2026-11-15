@@ -70,6 +70,10 @@ export class Editor {
       brush: { size: 14, pressure: true, smoothing: 40 },
       eraser: { size: 24, mode: 'normal' },
       bucket: { gap: 'small' },
+      pencil: { mode: 'smooth' },
+      lasso: { mode: 'free' },
+      polystar: { style: 'polygon', sides: 5, inner: 50 },
+      transform: { mode: 'free' },
     };
     this.multi = { enabled: false, before: 2, after: 2 };
     this.frameSel = null; // intervalo selecionado na timeline: { from, to, layerIds }

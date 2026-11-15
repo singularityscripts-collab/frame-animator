@@ -7,6 +7,7 @@ import { SYMBOL_TYPES, SOUND_SYNC, LABEL_TYPES } from '../model/document.js';
 import { EASE_LABELS } from '../player/ease.js';
 import { BUILTIN_PRESETS } from './presets.js';
 import { solidOf } from './tools-paint.js';
+import { TOOL_NAMES_FINAL, TOOL_OPTIONS_FINAL, buildFinal, fillFinal, finalSig } from './properties-final.js';
 
 const fmt = (v) => (Math.round(v * 10) / 10).toString();
 const TOOL_NAMES = {
@@ -45,6 +46,9 @@ const TOOL_OPTIONS = {
   camera: '<p class="hint">Arraste no palco para mover a câmera. Zoom, giro e tom de cor ficam na seção Câmera.</p>',
   gradient: '<p class="hint">Selecione uma forma com gradiente. Arraste o centro para mover, o quadrado para esticar, o círculo de cima para girar e, no radial, o círculo da diagonal para o tamanho e o triângulo para o foco.</p>',
 };
+
+Object.assign(TOOL_NAMES, TOOL_NAMES_FINAL);
+Object.assign(TOOL_OPTIONS, TOOL_OPTIONS_FINAL);
 
 const STYLE_HTML = `
   <div class="prop-grid">
@@ -87,6 +91,7 @@ export class PropertiesUI {
       const sig = span ? [span.start, span.duration, tw?.type, tw?.easeType, !!nextKf, span.sound?.id, span.sound?.sync, span.label ? 1 : 0, tw?.hints?.length].join(':') : '-';
       mode = `none:${ed.tool}:${sig}:${ed.activeLayerId}:${ed.activeLayer.type}:${ed.editStack.length}:${!!ed.cameraLayer()}:${ed.doc.library.sounds.length}`;
     }
+    mode += `|${finalSig(ed, items)}`;
     if (mode !== this.mode) {
       this.mode = mode;
       this.el.innerHTML = '';
@@ -201,6 +206,7 @@ export class PropertiesUI {
         </div>`,
       );
     }
+    buildFinal(this, items, span);
     this.bind();
   }
 
@@ -593,8 +599,9 @@ export class PropertiesUI {
     for (const k of ['fill', 'stroke']) set(this.el.querySelector(`[data-s="${k}"]`), solidOf(style[k]).slice(0, 7));
     this.el.querySelectorAll('[data-o]').forEach((inp) => {
       const [tool, key] = inp.dataset.o.split('.');
-      set(inp, ed.toolOptions[tool][key]);
+      set(inp, ed.toolOptions[tool]?.[key]);
     });
+    fillFinal(this, items);
   }
 }
 

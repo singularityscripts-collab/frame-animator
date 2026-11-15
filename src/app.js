@@ -2,6 +2,10 @@
 
 import { Editor } from './editor/editor.js';
 import './editor/editor-pro.js';
+import './editor/editor-final.js';
+import { extendActions } from './editor/actions-final.js';
+import { Panels } from './editor/panels.js';
+import { ActionsPanel, AlignPanel, ScenesPanel, ComponentsPanel, ScriptsPanel } from './editor/panels-ui.js';
 import { AudioEngine, sceneSchedule } from './player/audio.js';
 import { showContextMenu } from './editor/ui-kit.js';
 import { Stage } from './editor/stage.js';
@@ -19,27 +23,45 @@ import { createIO } from './editor/io.js';
 const editor = new Editor();
 const io = createIO(editor);
 const stage = new Stage(document.getElementById('stage'), editor);
-// ---------- abas do painel direito ----------
-const tabs = document.querySelectorAll('#props .tab');
-function showTab(name) {
-  tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-  document.getElementById('props-page').hidden = name !== 'props';
-  document.getElementById('library-page').hidden = name !== 'library';
-  document.getElementById('history-page').hidden = name !== 'history';
-  document.getElementById('colors-page').hidden = name !== 'colors';
-  if (name === 'colors') colors.render();
-  if (name === 'library') library.render();
-  if (name === 'history') history.render();
-}
-tabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
+// ---------- painéis encaixáveis ----------
+const panels = new Panels();
+const showTab = (name) => panels.show(name);
+const page = (id) => {
+  const el = document.createElement('div');
+  el.id = `${id}-page`;
+  el.hidden = true;
+  return el;
+};
 
 const actions = createActions({ editor, stage, io, ui: { showTab } });
+extendActions(actions, { editor, stage, io, panels });
 new ToolbarUI(editor);
 new PropertiesUI(editor, actions, document.getElementById('props-page'));
 const library = new LibraryUI(editor, actions, document.getElementById('library-page'));
 const history = new HistoryUI(editor, document.getElementById('history-page'));
 const colors = new ColorUI(editor, document.getElementById('colors-page'));
 new TimelineUI(editor, actions);
+
+const actionsPage = page('actions'), alignPage = page('align'), scenesPage = page('scenes'), compPage = page('components'), scriptsPage = page('scripts');
+const actionsPanel = new ActionsPanel(editor, actions, actionsPage);
+new AlignPanel(editor, alignPage);
+const scenesPanel = new ScenesPanel(editor, scenesPage);
+new ComponentsPanel(editor, compPage);
+new ScriptsPanel(editor, actions, scriptsPage);
+panels.register('props', 'Propriedades', document.getElementById('props-page'));
+panels.register('colors', 'Cores', document.getElementById('colors-page'), () => colors.render());
+panels.register('library', 'Biblioteca', document.getElementById('library-page'), () => library.render());
+panels.register('history', 'Histórico', document.getElementById('history-page'), () => history.render());
+panels.register('actions', 'Ações', actionsPage, () => actionsPanel.refresh());
+panels.register('align', 'Alinhar', alignPage);
+panels.register('scenes', 'Cenas', scenesPage, () => scenesPanel.render());
+panels.register('components', 'Componentes', compPage);
+panels.register('scripts', 'Scripts', scriptsPage);
+panels.apply();
+document.getElementById('tl-resizer').addEventListener('pointerup', () => {
+  const h = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tl-h'));
+  if (Number.isFinite(h)) panels.setTimelineHeight(h);
+});
 
 // ---------- teclado ----------
 window.addEventListener('keydown', (e) => {
@@ -185,7 +207,7 @@ if (window.api) {
 }
 
 // para depuração no console
-window.__fa = { editor, stage, actions };
+window.__fa = { editor, stage, actions, panels };
 
 // botões não roubam o foco do palco (assim Enter, setas e atalhos continuam indo para o editor)
 document.addEventListener('mousedown', (e) => {

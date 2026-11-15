@@ -195,6 +195,14 @@ export class AudioEngine {
       .filter((e) => e.until > e.at);
     this.nodes = scheduleInto(actx, actx.destination, buffers, shifted, t0);
   }
+  /** Toca mais sons sem parar os que já estão tocando (runtime interativo). */
+  async add(doc, entries) {
+    if (!entries.length) return;
+    const actx = this.ctx();
+    const t0 = actx.currentTime;
+    const buffers = await this.buffersFor(doc, entries);
+    this.nodes.push(...scheduleInto(actx, actx.destination, buffers, entries, t0));
+  }
   stop() {
     this.token++;
     for (const n of this.nodes) {

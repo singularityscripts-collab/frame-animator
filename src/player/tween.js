@@ -186,7 +186,30 @@ export function lerpColorEffect(a, b, t) {
 
 // ---------- tween de um trecho ----------
 export function compatible(a, b) {
-  return a && b && a.type === b.type && (a.type !== 'instance' || a.symbolId === b.symbolId);
+  return (
+    a && b && a.type === b.type && (a.type !== 'instance' || a.symbolId === b.symbolId) && (a.type !== 'bitmap' || a.assetId === b.assetId)
+  );
+}
+
+/** Filtros, 3D e malha de pinos também andam no tween. */
+function lerpExtras(out, a, b, t) {
+  for (const k of ['rx', 'ry', 'z']) if (a[k] || b[k]) out[k] = lerp(a[k] || 0, b[k] || 0, t);
+  const fa = a.filters || [], fb = b.filters || [];
+  if (fa.length && fa.length === fb.length && fa.every((f, i) => f.type === fb[i].type)) {
+    out.filters = fa.map((f, i) => {
+      const g = { ...f };
+      for (const [k, v] of Object.entries(f)) {
+        const w = fb[i][k];
+        if (typeof v === 'number' && typeof w === 'number') g[k] = lerp(v, w, t);
+        else if (typeof v === 'string' && v.startsWith('#') && typeof w === 'string') g[k] = lerpHex(v, w, t);
+      }
+      return g;
+    });
+  }
+  const pa = a.warp?.pins, pb = b.warp?.pins;
+  if (pa?.length && pb?.length === pa.length) {
+    out.warp = { pins: pa.map((p, i) => ({ ...p, dx: lerp(p.dx, pb[i].dx, t), dy: lerp(p.dy, pb[i].dy, t) })) };
+  }
 }
 
 /**
@@ -203,7 +226,9 @@ export function tweenElements(span, next, offset, guide = null) {
     let matrix = lerpMatrix(a.matrix, b.matrix, t, tw);
     if (guide) matrix = followGuide(matrix, a, b, t, guide, tw.orient);
     const out = { ...a, matrix };
+    lerpExtras(out, a, b, t);
     if (a.type === 'instance') out.color = lerpColorEffect(a.color, b.color, t);
+    else if (a.type !== 'shape') return out;
     else {
       if (a.fill && b.fill) out.fill = lerpFill(a.fill, b.fill, t);
       if (a.stroke && b.stroke) out.stroke = lerpHex(a.stroke, b.stroke, t);

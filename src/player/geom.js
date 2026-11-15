@@ -196,3 +196,119 @@ export function morphPath(pairs, t) {
   if (!subs.length) return null;
   return subs.length === 1 ? subs[0] : { closed: subs.every((s) => s.closed), fillRule: 'nonzero', subs };
 }
+
+// ---------- traço de largura variável (ferramenta de largura) ----------
+/** Largura relativa no ponto t (0 a 1) do traço. profile = [{ t, w }] (w multiplica a espessura). */
+export function profileAt(profile, t) {
+  const pts = [...profile].sort((a, b) => a.t - b.t);
+  if (!pts.length) return 1;
+  if (pts[0].t > 0) pts.unshift({ t: 0, w: 1 });
+  if (pts[pts.length - 1].t < 1) pts.push({ t: 1, w: 1 });
+  for (let i = 1; i < pts.length; i++) {
+    if (t <= pts[i].t) {
+      const a = pts[i - 1], b = pts[i];
+      const u = (t - a.t) / (b.t - a.t || 1);
+      return a.w + (b.w - a.w) * u;
+    }
+  }
+  return pts[pts.length - 1].w;
+}
+
+/** Contorno (polígonos) de um traço com largura variável, no espaço local da forma. */
+export function variableStrokePolys(path, width, profile) {
+  const subs = subpaths(path).map((sp) => measure(flattenSub(sp, [1, 0, 0, 1, 0, 0], 10)));
+  const total = subs.reduce((n, m) => n + m.total, 0) || 1;
+  const polys = [];
+  let acc = 0;
+  for (const m0 of subs) {
+    if (m0.points.length < 2) continue;
+    // reamostra (uma reta tem só 2 pontos, mas a largura muda no meio dela)
+    const steps = Math.max(24, Math.min(400, Math.ceil(m0.total / 3)));
+    const rs = [];
+    for (let k = 0; k <= steps; k++) rs.push(pointAt(m0, (m0.total * k) / steps));
+    const m = measure(rs.map((q) => ({ x: q.x, y: q.y })));
+    const n = m.points.length;
+    const left = [], right = [];
+    for (let i = 0; i < n; i++) {
+      const a = m.points[Math.max(0, i - 1)], c = m.points[Math.min(n - 1, i + 1)];
+      let tx = c.x - a.x, ty = c.y - a.y;
+      const l = Math.hypot(tx, ty) || 1;
+      tx /= l;
+      ty /= l;
+      const r = (width * profileAt(profile, (acc + m.len[i]) / total)) / 2;
+      const p = m.points[i];
+      left.push({ x: p.x - ty * r, y: p.y + tx * r });
+      right.push({ x: p.x + ty * r, y: p.y - tx * r });
+    }
+    const closed = Math.hypot(m.points[0].x - m.points[n - 1].x, m.points[0].y - m.points[n - 1].y) < 0.01;
+    if (closed) {
+      polys.push(left, right.reverse());
+    } else polys.push([...left, ...right.reverse()]);
+    acc += m.total;
+  }
+  return polys;
+}
+
+/** Posições (e ângulos) para repetir um desenho ao longo do caminho (pincel de padrão). */
+export function patternPlacements(path, step) {
+  const out = [];
+  if (!(step > 0.5)) return out;
+  for (const sp of subpaths(path)) {
+    const m = measure(flattenSub(sp, [1, 0, 0, 1, 0, 0], 10));
+    for (let s = step / 2; s < m.total; s += step) out.push(pointAt(m, s));
+  }
+  return out;
+}
+
+/** Limites aproximados (pelos pontos de controle) do que uma timeline mostra num quadro. */
+export function quickBounds(doc, tl, frame, layerFrameFn, symbolFn, depth = 0) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const add = (m, x, y, pad = 0) => {
+    const px = m[0] * x + m[2] * y + m[4], py = m[1] * x + m[3] * y + m[5];
+    minX = Math.min(minX, px - pad);
+    minY = Math.min(minY, py - pad);
+    maxX = Math.max(maxX, px + pad);
+    maxY = Math.max(maxY, py + pad);
+  };
+  for (const layer of tl.layers) {
+    if (!layer.visible || layer.type === 'guide' || layer.type === 'folder' || layer.type === 'camera') continue;
+    const lf = layerFrameFn(layer, frame, tl);
+    if (!lf) continue;
+    for (const { el } of lf.items) {
+      const m = el.matrix;
+      if (el.type === 'shape') {
+        const pad = (el.strokeWidth || 0) * Math.max(1, ...(el.widthProfile || []).map((p) => p.w)) / 2 + (el.brush ? 40 : 0);
+        for (const sp of subpaths(el.path)) {
+          for (const q of sp.pts) {
+            add(m, q[0], q[1], pad);
+            add(m, q[0] + q[2], q[1] + q[3], pad);
+            add(m, q[0] + q[4], q[1] + q[5], pad);
+          }
+        }
+        for (const p of el.warp?.pins || []) add(m, p.x + p.dx, p.y + p.dy, 20);
+      } else if (el.type === 'bitmap' || el.type === 'component') {
+        add(m, 0, 0);
+        add(m, el.w, 0);
+        add(m, 0, el.h);
+        add(m, el.w, el.h);
+      } else if (el.type === 'text') {
+        const w = el.width > 0 ? el.width : (String(el.text || '').length + 1) * (el.size || 24) * 0.7;
+        const h = (String(el.text || '').split('\n').length + 1) * (el.size || 24) * 1.4;
+        add(m, -4, -4);
+        add(m, w + 4, h);
+      } else if (el.type === 'instance' && depth < 16) {
+        const sym = symbolFn(doc, el.symbolId);
+        const b = sym && quickBounds(doc, sym, 0, layerFrameFn, symbolFn, depth + 1);
+        if (b) {
+          const pad = (el.filters || []).reduce((n, f) => n + (f.blur || 0) + (f.distance || 0), 0);
+          add(m, b.x, b.y, pad);
+          add(m, b.x + b.w, b.y, pad);
+          add(m, b.x, b.y + b.h, pad);
+          add(m, b.x + b.w, b.y + b.h, pad);
+        }
+      }
+    }
+  }
+  if (minX === Infinity) return null;
+  return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+}

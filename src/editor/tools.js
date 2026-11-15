@@ -6,6 +6,8 @@ import * as C from './commands.js';
 import { clone } from '../model/document.js';
 import { rectPath, ellipsePath, linePath, freehandPath, makeShape, pointsBounds } from '../model/geometry.js';
 import { brushTool, eraserTool, bucketTool, eyedropperTool, gradientTool } from './tools-paint.js';
+import { subselectTool, lassoTool, polystarTool, penTool, anchorTool, textTool, boneTool, warpTool, threeDTool, widthTool, transformTool, rotateViewTool } from './tools-final.js';
+import { simplify } from '../model/geometry.js';
 
 const T = (x, y) => translation(x, y);
 const compose = (...ms) => ms.reduce((a, b) => multiply(a, b));
@@ -25,6 +27,20 @@ export function createTools(stage, editor) {
     camera: cameraTool(stage, editor),
     hand: handTool(stage),
     zoom: zoomTool(stage),
+    subselect: subselectTool(stage, editor),
+    lasso: lassoTool(stage, editor),
+    polystar: polystarTool(stage, editor),
+    pen: penTool(stage, editor),
+    penAdd: anchorTool(stage, editor, 'add'),
+    penDelete: anchorTool(stage, editor, 'delete'),
+    penConvert: anchorTool(stage, editor, 'convert'),
+    text: textTool(stage, editor),
+    bone: boneTool(stage, editor),
+    warp: warpTool(stage, editor),
+    threeD: threeDTool(stage, editor),
+    width: widthTool(stage, editor),
+    transform: transformTool(stage, editor),
+    rotateView: rotateViewTool(stage),
   };
 }
 
@@ -136,6 +152,7 @@ function selectTool(stage, editor) {
         // num quadro interpolado de tween clássico, cria o keyframe antes de mexer
         st.materialized = editor.materialize();
         Object.assign(st, capture());
+        st.box0 = editor.selectionBounds();
         if (st.fr) {
           st.fr = stage.selectionFrame();
           st.Finv = invert(st.fr.F);
@@ -146,6 +163,7 @@ function selectTool(stage, editor) {
       if (st.mode === 'move') {
         let dx = e.wx - st.start.wx, dy = e.wy - st.start.wy;
         if (e.shift) Math.abs(dx) > Math.abs(dy) ? (dy = 0) : (dx = 0);
+        if (!e.ctrl && st.box0) ({ dx, dy } = stage.snapBox(st.box0, dx, dy, new Set(st.items.map((x) => x.it.el.id))));
         W = T(dx, dy);
       } else if (st.mode === 'scale') {
         const { box, F } = st.fr;
@@ -205,6 +223,7 @@ function selectTool(stage, editor) {
         editor.commit(new C.SetSpanProps(layerId, span.start, { tween: s.before }, { tween: span.tween }, s.mode === 'hint' ? 'Mover dica de forma' : 'Editar caminho'));
         return;
       }
+      stage.snapLines = [];
       if (!s.moved) return;
       const label = { move: 'Mover', scale: 'Escalar', rotate: 'Girar' }[s.mode];
       editor.endLiveEdit(label, s.snap);
@@ -305,16 +324,26 @@ function boxShapeTool(stage, editor, kind) {
   return {
     cursor: 'crosshair',
     down(e) {
-      st = { x0: e.wx, y0: e.wy, preview: null };
+      const p = e.ctrl ? { x: e.wx, y: e.wy } : stage.snapPoint(e.wx, e.wy);
+      st = { x0: p.x, y0: p.y, preview: null };
     },
     move(e) {
       if (!st) return;
+      if (!e.ctrl) {
+        const p = stage.snapPoint(e.wx, e.wy);
+        e = { ...e, wx: p.x, wy: p.y };
+      }
       const g = geometry(e);
       st.preview = g.w > 0 && g.h > 0 ? build(g) : null;
       stage.invalidate();
     },
     up(e) {
       if (!st) return;
+      if (!e.ctrl) {
+        const p = stage.snapPoint(e.wx, e.wy);
+        e = { ...e, wx: p.x, wy: p.y };
+      }
+      stage.snapLines = [];
       const g = geometry(e);
       st = null;
       stage.invalidate();
@@ -399,7 +428,7 @@ function pencilTool(stage, editor) {
       stage.invalidate();
       if (p.length < 2) return;
       const s = editor.style;
-      const { path, cx, cy } = freehandPath(p, 1.2 / stage.scale);
+      const { path, cx, cy } = pencilPath(p, editor.toolOptions.pencil?.mode || 'smooth', stage.scale);
       editor.addElements([makeShape({ path, cx, cy, fill: null, stroke: s.stroke, strokeWidth: Math.max(1, s.strokeWidth) })], 'Lápis');
     },
     cancel() {
@@ -418,6 +447,51 @@ function pencilTool(stage, editor) {
       ctx.restore();
     },
   };
+}
+
+/**
+ * Caminho do lápis conforme o modo:
+ * - smooth: curvas suaves; ink: segue o traço quase como foi feito;
+ * - straighten: retas e cantos, e reconhece linha, retângulo e elipse.
+ */
+export function pencilPath(p, mode, scale = 1) {
+  if (mode === 'smooth') return freehandPath(p, 1.2 / scale);
+  const b = pointsBounds(p);
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  const toPath = (pts, closed) => ({ path: { closed, pts: pts.map((q) => [q.x - cx, q.y - cy, 0, 0, 0, 0]) }, cx, cy });
+  if (mode === 'ink') {
+    const pts = simplify(p, 0.35 / scale);
+    return toPath(pts.length >= 2 ? pts : [p[0], p[p.length - 1]], false);
+  }
+  // endireitar
+  const diag = Math.hypot(b.w, b.h) || 1;
+  const first = p[0], last = p[p.length - 1];
+  const closed = p.length > 8 && Math.hypot(first.x - last.x, first.y - last.y) < diag * 0.18;
+  if (closed) {
+    // elipse? distância ao centro quase constante (normalizada pelos raios)
+    const rx = b.w / 2 || 1, ry = b.h / 2 || 1;
+    const rs = p.map((q) => Math.hypot((q.x - cx) / rx, (q.y - cy) / ry));
+    const mean = rs.reduce((a, r) => a + r, 0) / rs.length;
+    const dev = Math.sqrt(rs.reduce((a, r) => a + (r - mean) ** 2, 0) / rs.length);
+    const corners = simplify([...p, first], diag * 0.08);
+    if (dev < 0.09 && corners.length > 5) return { path: ellipsePath(b.w, b.h), cx, cy };
+    if (corners.length === 5) {
+      // quatro cantos perto da caixa: retângulo
+      const near = corners.slice(0, 4).every((q) => Math.min(Math.abs(q.x - b.x), Math.abs(q.x - b.x - b.w)) < diag * 0.15 && Math.min(Math.abs(q.y - b.y), Math.abs(q.y - b.y - b.h)) < diag * 0.15);
+      if (near) return { path: rectPath(b.w, b.h), cx, cy };
+    }
+    return toPath(corners.slice(0, -1), true);
+  }
+  const pts = simplify(p, Math.max(2 / scale, diag * 0.04));
+  // quase reta: vira linha; ângulos perto de 0/45/90 encaixam
+  if (pts.length === 2) {
+    const dx = last.x - first.x, dy = last.y - first.y;
+    const a = Math.atan2(dy, dx), step = Math.PI / 4, ar = Math.round(a / step) * step;
+    const L = Math.hypot(dx, dy);
+    const end = Math.abs(a - ar) < 0.12 ? { x: first.x + Math.cos(ar) * L, y: first.y + Math.sin(ar) * L } : last;
+    return toPath([first, end], false);
+  }
+  return toPath(pts, false);
 }
 
 // ---------- Mão e zoom ----------

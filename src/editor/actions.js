@@ -316,7 +316,16 @@ export function createActions({ editor, stage, io, ui = {} }) {
   }
 
   const keymap = new Map();
-  for (const [id, d] of Object.entries(defs)) for (const k of d.keys) keymap.set(normalize(k), id);
+  let custom = {}; // ação → [atalhos] escolhidos pelo usuário
+  function rebuildKeymap() {
+    keymap.clear();
+    for (const [id, d] of Object.entries(defs)) for (const k of custom[id] ?? d.keys) keymap.set(normalize(k), id);
+  }
+  function setCustomKeys(map) {
+    custom = map && typeof map === 'object' ? map : {};
+    rebuildKeymap();
+  }
+  rebuildKeymap();
 
   function run(id) {
     const d = defs[id];
@@ -355,6 +364,11 @@ export function createActions({ editor, stage, io, ui = {} }) {
       if (e.key === 'Escape') e.target.blur();
       return false;
     }
+    // a ferramenta ativa tem a primeira chance (Enter fecha o laço poligonal e a caneta, por exemplo)
+    if (!e.ctrlKey && !e.metaKey && stage.currentTool?.().keydown?.(e)) {
+      e.preventDefault();
+      return true;
+    }
     const id = keymap.get(comboOf(e));
     if (!id) return false;
     e.preventDefault();
@@ -362,5 +376,5 @@ export function createActions({ editor, stage, io, ui = {} }) {
     return true;
   }
 
-  return { defs, run, handleKey, comboOf, symbolProperties, layerProperties, renameScene, importSound };
+  return { defs, run, handleKey, comboOf, normalize, rebuildKeymap, setCustomKeys, keysOf: (id) => custom[id] ?? defs[id]?.keys ?? [], symbolProperties, layerProperties, renameScene, importSound };
 }

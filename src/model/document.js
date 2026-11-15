@@ -3,7 +3,7 @@
 // Tudo é JSON puro, serializável.
 
 export const FORMAT = 'frame-animator';
-export const VERSION = 4;
+export const VERSION = 5;
 
 export const LAYER_TYPES = {
   normal: 'Normal',
@@ -19,7 +19,21 @@ export const LAYER_COLORS = [
   '#4f9dff', '#ff6b6b', '#3ecf8e', '#f5a524', '#b072ff', '#00c2d1', '#ff7ac6', '#a3d14b',
 ];
 
-export const SYMBOL_TYPES = { graphic: 'Gráfico', movieclip: 'Movie clip' };
+export const SYMBOL_TYPES = { graphic: 'Gráfico', movieclip: 'Movie clip', button: 'Botão' };
+export const TEXT_KINDS = { static: 'Estático', dynamic: 'Dinâmico', input: 'Entrada' };
+export const COMPONENT_KINDS = { button: 'Botão', list: 'Lista', video: 'Vídeo' };
+
+export function defaultPublish() {
+  return {
+    formats: { html5: true, mp4: false, gif: false, png: false, svg: false, sprites: false, lottie: false },
+    html5: { loop: true, scale: 'fit' },
+    video: { scale: 100 },
+    sprites: { trim: true, layout: 'pack', padding: 2, scale: 100 },
+    svg: { scale: 100 },
+    outputDir: null,
+    baseName: null,
+  };
+}
 
 let counter = 0;
 export function uid(prefix = 'e') {
@@ -38,7 +52,11 @@ export function createDocument({ width = 1280, height = 720, fps = 24, backgroun
     fps,
     background,
     scenes: [createScene('Cena 1')],
-    library: { folders: [], items: [], sounds: [] },
+    library: { folders: [], items: [], sounds: [], bitmaps: [] },
+    grid: { show: false, size: 20, snap: false, color: '#8a8a96' },
+    guides: { show: true, locked: false, snap: true, items: [] },
+    perspective: { angle: 55 },
+    publish: defaultPublish(),
   };
 }
 
@@ -62,7 +80,8 @@ export function createLayer(name, colorIndex = 0, length = 1) {
 }
 
 export function createSymbol(name, type = 'graphic', elements = [], folderId = null) {
-  const layer = createLayer('Camada 1', 0);
+  // botão: 4 quadros (para cima, sobre, pressionado, área de clique)
+  const layer = createLayer('Camada 1', 0, type === 'button' ? 4 : 1);
   layer.frames[0].elements = elements;
   return { id: uid('y'), name, type, folderId, layers: [layer] };
 }
@@ -73,7 +92,7 @@ export function createInstance(symbol, matrix = [1, 0, 0, 1, 0, 0]) {
     type: 'instance',
     symbolId: symbol.id,
     matrix,
-    behavior: symbol.type === 'movieclip' ? 'movieclip' : 'graphic',
+    behavior: symbol.type === 'movieclip' ? 'movieclip' : symbol.type === 'button' ? 'button' : 'graphic',
     loop: 'loop',
     firstFrame: 0,
     color: { mode: 'none' },
@@ -183,6 +202,17 @@ export function parseDocument(text) {
   // versão 1 não tinha biblioteca; a 4 ganhou sons
   if (!d.library || typeof d.library !== 'object') d.library = { folders: [], items: [] };
   if (!Array.isArray(d.library.sounds)) d.library.sounds = [];
+  if (!Array.isArray(d.library.bitmaps)) d.library.bitmaps = [];
+  d.library.bitmaps = d.library.bitmaps.filter((b) => b && typeof b.data === 'string' && b.w > 0 && b.h > 0);
+  for (const b of d.library.bitmaps) {
+    b.id ||= uid('b');
+    b.name ||= 'Imagem';
+  }
+  const pub = defaultPublish();
+  d.publish = { ...pub, ...(d.publish || {}), formats: { ...pub.formats, ...(d.publish?.formats || {}) } };
+  if (!d.grid || typeof d.grid !== 'object') d.grid = { show: false, size: 20, snap: false, color: '#8a8a96' };
+  if (!d.guides || !Array.isArray(d.guides.items)) d.guides = { show: true, locked: false, snap: true, items: [] };
+  if (!d.perspective) d.perspective = { angle: 55 };
   if (!Array.isArray(d.library.folders)) d.library.folders = [];
   if (!Array.isArray(d.library.items)) d.library.items = [];
   const folderIds = new Set();
@@ -212,7 +242,8 @@ export function parseDocument(text) {
   for (const tl of allTimelines(d)) {
     tl.id ||= uid('s');
     if (!tl.layers.length) tl.layers = [createLayer('Camada 1')];
-    tl.layers.forEach((l, i) => normalizeLayer(l, i, symbolIds, soundIds));
+    const bitmapIds = new Set(d.library.bitmaps.map((b) => b.id));
+    tl.layers.forEach((l, i) => normalizeLayer(l, i, symbolIds, soundIds, bitmapIds));
     const layerIds = new Set(tl.layers.map((l) => l.id));
     const byId = new Map(tl.layers.map((l) => [l.id, l]));
     for (const l of tl.layers) {
@@ -245,6 +276,7 @@ function validPath(path) {
 
 export function validFill(f) {
   if (typeof f === 'string') return true;
+  if (f && f.type === 'bitmap') return typeof f.assetId === 'string';
   return (
     !!f &&
     (f.type === 'linear' || f.type === 'radial') &&
@@ -254,7 +286,7 @@ export function validFill(f) {
   );
 }
 
-function normalizeLayer(l, i, symbolIds, soundIds) {
+function normalizeLayer(l, i, symbolIds, soundIds, bitmapIds = new Set()) {
   l.id ||= uid('l');
   if (!LAYER_TYPES[l.type]) l.type = 'normal';
   l.depth = Number.isFinite(l.depth) ? Math.max(-900, Math.min(100000, l.depth)) : 0;
@@ -279,17 +311,28 @@ function normalizeLayer(l, i, symbolIds, soundIds) {
     if (f.camera && typeof f.camera !== 'object') delete f.camera;
     if (!Array.isArray(f.elements)) f.elements = [];
     f.elements = f.elements.filter(
-      (el) => el && ((el.type === 'shape' && validPath(el.path)) || (el.type === 'instance' && symbolIds.has(el.symbolId))),
+      (el) =>
+        el &&
+        ((el.type === 'shape' && validPath(el.path)) ||
+          (el.type === 'instance' && symbolIds.has(el.symbolId)) ||
+          (el.type === 'text' && typeof el.text === 'string') ||
+          (el.type === 'bitmap' && bitmapIds.has(el.assetId)) ||
+          (el.type === 'component' && COMPONENT_KINDS[el.kind])),
     );
+    if (f.script != null && typeof f.script !== 'string') delete f.script;
     for (const el of f.elements) {
       el.id ||= uid('e');
       if (!Array.isArray(el.matrix) || el.matrix.length !== 6) el.matrix = [1, 0, 0, 1, 0, 0];
+      if (el.type === 'text') {
+        if (!TEXT_KINDS[el.kind]) el.kind = 'static';
+        el.size = Number.isFinite(el.size) ? el.size : 24;
+      }
       if (el.type === 'shape') {
         if (el.fill && !validFill(el.fill)) el.fill = null;
         if (el.stroke && typeof el.stroke !== 'string') el.stroke = null;
       }
       if (el.type === 'instance') {
-        if (el.behavior !== 'movieclip') el.behavior = 'graphic';
+        if (!['movieclip', 'button'].includes(el.behavior)) el.behavior = 'graphic';
         if (!['loop', 'once', 'single'].includes(el.loop)) el.loop = 'loop';
         el.firstFrame = Math.max(0, Math.floor(el.firstFrame) || 0);
         if (!el.color || typeof el.color !== 'object') el.color = { mode: 'none' };

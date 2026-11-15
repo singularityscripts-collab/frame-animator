@@ -3,7 +3,11 @@
 // Não depende de nada do editor: só recebe o documento (JSON) e um contexto Canvas 2D.
 
 import { colorToCT, tweenElements, motionElement, applyEase, lerpHex } from './tween.js';
-import { guideFromElements } from './geom.js';
+import { guideFromElements, variableStrokePolys, patternPlacements, quickBounds, flattenSub, measure, pointAt } from './geom.js';
+import { getImage, drawText, drawComponent, textBox } from './assets.js';
+import { BLEND_MODES, applyFilters, cachedContent, renderContent, drawNineSlice, draw3D, has3D, scaleOfTransform } from './effects.js';
+import { drawMesh, mlsPoint, warpPathPts, subdivideSub } from './mesh.js';
+import { poseElements, lerpPose } from './bones.js';
 
 // ---------- Matrizes 2D no formato do canvas: [a, b, c, d, e, f] ----------
 
@@ -91,6 +95,10 @@ export function isGradient(fill) {
   return !!fill && typeof fill === 'object' && (fill.type === 'linear' || fill.type === 'radial');
 }
 
+export function isBitmapFill(fill) {
+  return !!fill && typeof fill === 'object' && fill.type === 'bitmap';
+}
+
 function stopColor(s) {
   const a = Math.max(0, Math.min(1, s.alpha ?? 1));
   const h = String(s.color || '#000000').replace('#', '');
@@ -112,7 +120,20 @@ export function makeCanvasGradient(ctx, g) {
 }
 
 /** Preenche o Path2D `p` (em coordenadas locais da forma) com cor ou gradiente. */
-export function fillPath(ctx, fill, p, rule = 'nonzero') {
+export function fillPath(ctx, fill, p, rule = 'nonzero', doc = null) {
+  if (fill && fill.type === 'bitmap') {
+    const img = doc && getImage(doc, fill.assetId);
+    if (!img) {
+      ctx.fillStyle = 'rgba(128,128,128,0.3)';
+      ctx.fill(p, rule);
+      return;
+    }
+    const pat = ctx.createPattern(img, 'repeat');
+    if (fill.matrix && pat.setTransform) pat.setTransform(new DOMMatrix(fill.matrix));
+    ctx.fillStyle = pat;
+    ctx.fill(p, rule);
+    return;
+  }
   if (!isGradient(fill)) {
     ctx.fillStyle = fill;
     ctx.fill(p, rule);
@@ -197,6 +218,13 @@ export function layerFrame(layer, frame, tl = null) {
       elements = tweenElements(span, next, offset, span.tween.type === 'classic' ? guideFor(layer, frame, tl) : null);
       tweened = true;
     }
+  }
+  if (span.armature) {
+    // esqueleto: os elementos presos aos ossos acompanham a pose (interpolada no tween)
+    const next = tweenTarget(layer, si);
+    let pose = span.armature.pose || {};
+    if (next?.armature && offset > 0) pose = lerpPose(pose, next.armature.pose || {}, applyEase(offset / span.duration, span.tween));
+    elements = poseElements(elements, span.armature, pose);
   }
   return {
     span,
@@ -384,57 +412,171 @@ function drawWithColor(ctx, ct, depth, draw) {
 }
 
 /**
- * Desenha um elemento (forma ou instância de símbolo).
+ * Desenha um elemento (forma, texto, bitmap, componente ou instância de símbolo).
  * env.outline: cor para desenhar só o contorno; env.outlinePx: espessura do contorno em pixels.
  * env.offset / env.mcTime: tempo para escolher o quadro de instâncias.
  * env.playMC: movie clips tocam (teste/export) ou ficam no 1º quadro (editor).
+ * env.rt / env.path: runtime interativo (scripts, botões) e o caminho da instância.
  */
 export function drawElement(ctx, doc, el, env = {}) {
   const depth = env.depth || 0;
-  if (el.type === 'shape') {
-    const p = getPath2D(el.path);
-    if (env.outline) {
-      const tp = new Path2D();
-      tp.addPath(p, ctx.getTransform().multiply(new DOMMatrix(el.matrix)));
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.strokeStyle = env.outline;
-      ctx.lineWidth = env.outlinePx || 1;
-      ctx.lineJoin = 'round';
-      ctx.stroke(tp);
-      ctx.restore();
-      return;
-    }
-    const ct = el.color && el.color.mode !== 'none' ? colorToCT(el.color) : null;
-    if (ct) return drawWithColor(ctx, ct, depth, (c) => drawShapeBody(c, el, p));
-    drawShapeBody(ctx, el, p);
+  const rt = env.rt;
+  const path = rt ? `${env.path || ''}/${el.name || el.id}` : null;
+  if (rt) {
+    el = rt.adjust(path, el);
+    if (!el) return;
+  }
+  if (env.outline && el.type !== 'instance') {
+    const box = el.type === 'shape' ? null : localBox(el, rt, path);
+    const p = box ? rectPath2D(box) : getPath2D(shapePath(el));
+    const tp = new Path2D();
+    tp.addPath(p, ctx.getTransform().multiply(new DOMMatrix(el.matrix)));
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.strokeStyle = env.outline;
+    ctx.lineWidth = env.outlinePx || 1;
+    ctx.lineJoin = 'round';
+    ctx.stroke(tp);
+    ctx.restore();
     return;
   }
-  if (el.type === 'instance') {
-    drawInstance(ctx, doc, el, env, depth);
+  const ct = el.type !== 'instance' && el.color && el.color.mode !== 'none' ? colorToCT(el.color) : null;
+  const body = (c) => {
+    if (el.type === 'shape') drawShapeBody(c, el, getPath2D(shapePath(el)), doc, env);
+    else if (el.type === 'text') { if (!el.__editing) drawText(c, el, rt ? rt.textOf(path, el) : el.text); }
+    else if (el.type === 'bitmap') drawBitmap(c, doc, el);
+    else if (el.type === 'component') drawComponent(c, el, rt ? rt.componentState(path, el) : {});
+  };
+  if (el.type === 'instance') return drawInstance(ctx, doc, el, { ...env, path }, depth);
+  if (ct) drawWithColor(ctx, ct, depth, body);
+  else body(ctx);
+  if (rt && (el.type === 'component' || (el.type === 'text' && el.kind === 'input'))) {
+    rt.register(path, el, multiply(domToArr(ctx.getTransform()), el.matrix), localBox(el, rt, path), el.type);
   }
 }
 
-function drawShapeBody(ctx, el, p) {
+const domToArr = (t) => [t.a, t.b, t.c, t.d, t.e, t.f];
+const rectPath2D = (b) => {
+  const p = new Path2D();
+  p.rect(b.x, b.y, b.w, b.h);
+  return p;
+};
+
+function localBox(el, rt, path) {
+  if (el.type === 'text') return textBox(el, rt ? rt.textOf(path, el) : el.text);
+  return { x: 0, y: 0, w: el.w || 0, h: el.h || 0 };
+}
+
+/** Caminho que a forma mostra (com a malha de pinos aplicada, se tiver). */
+const warpCache = new WeakMap();
+export function shapePath(el) {
+  const pins = el.warp?.pins;
+  if (!pins?.length) return el.path;
+  const key = JSON.stringify(pins);
+  const got = warpCache.get(el.path);
+  if (got && got.key === key) return got.path;
+  const subs = subpaths(el.path).map((sp) => warpPathPts(subdivideSub(sp, 3), pins));
+  const path = subs.length === 1 ? subs[0] : { closed: el.path.closed, fillRule: el.path.fillRule, subs };
+  warpCache.set(el.path, { key, path });
+  return path;
+}
+
+function drawShapeBody(ctx, el, p, doc, env) {
   ctx.save();
   ctx.transform(...el.matrix);
-  if (el.fill && el.path.closed) fillPath(ctx, el.fill, p, el.path.fillRule || 'nonzero');
+  const sp = shapePath(el);
+  if (el.fill && el.path.closed) fillPath(ctx, el.fill, p, el.path.fillRule || 'nonzero', doc);
   if (el.stroke && el.strokeWidth > 0) {
-    ctx.strokeStyle = el.stroke;
-    ctx.lineWidth = el.strokeWidth;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.stroke(p);
+    if (el.brush && doc) drawBrushStroke(ctx, doc, el, sp, env);
+    else if (el.widthProfile?.length) {
+      const poly = new Path2D();
+      for (const pl of variableStrokePolys(sp, el.strokeWidth, el.widthProfile)) {
+        pl.forEach((q, i) => (i ? poly.lineTo(q.x, q.y) : poly.moveTo(q.x, q.y)));
+        poly.closePath();
+      }
+      ctx.fillStyle = el.stroke;
+      ctx.fill(poly, 'nonzero');
+    } else {
+      ctx.strokeStyle = el.stroke;
+      ctx.lineWidth = el.strokeWidth;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.stroke(p);
+    }
   }
   ctx.restore();
+}
+
+/** Pincel de padrão (repete o símbolo ao longo do traço) ou de arte (estica o símbolo no traço). */
+function drawBrushStroke(ctx, doc, el, sp, env) {
+  const sym = symbolById(doc, el.brush.symbolId);
+  if (!sym || (env.depth || 0) > 8) return;
+  const b = quickBounds(doc, sym, 0, layerFrame, symbolById);
+  if (!b) return;
+  const scale = (el.brush.scale ?? 100) / 100;
+  const inner = { depth: (env.depth || 0) + 1, camera: false };
+  if (el.brush.type === 'pattern') {
+    const step = Math.max(2, b.w * scale * (1 + (el.brush.spacing ?? 0) / 100));
+    for (const pl of patternPlacements(sp, step)) {
+      ctx.save();
+      ctx.translate(pl.x, pl.y);
+      ctx.rotate(pl.angle);
+      ctx.scale(scale, scale);
+      ctx.translate(-(b.x + b.w / 2), -(b.y + b.h / 2));
+      renderTimeline(ctx, doc, sym, 0, inner);
+      ctx.restore();
+    }
+    return;
+  }
+  // arte: a imagem do símbolo acompanha o caminho (largura = comprimento, altura = espessura)
+  const sub = subpaths(sp)[0];
+  if (!sub) return;
+  const m = measure(flattenSub(sub, IDENTITY, 12));
+  if (m.total < 1) return;
+  const px = Math.min(4, Math.max(1, Math.sqrt(Math.abs(ctx.getTransform().a * ctx.getTransform().d)) * 1.5));
+  const img = renderContent(b, px, (c) => renderTimeline(c, doc, sym, 0, inner), scratchCanvas('brush', 2, 2));
+  const thick = b.h * scale;
+  drawMesh(
+    ctx,
+    img,
+    { x: 1, y: 1, w: b.w * px, h: b.h * px },
+    (u, v) => {
+      const p = pointAt(m, u * m.total);
+      const off = (v - 0.5) * thick;
+      return { x: p.x - Math.sin(p.angle) * off, y: p.y + Math.cos(p.angle) * off };
+    },
+    Math.max(8, Math.min(60, Math.round(m.total / 12))),
+    2,
+  );
+}
+
+function drawBitmap(ctx, doc, el) {
+  const img = getImage(doc, el.assetId);
+  ctx.save();
+  ctx.transform(...el.matrix);
+  if (!img) {
+    ctx.fillStyle = 'rgba(128,128,128,0.25)';
+    ctx.fillRect(0, 0, el.w, el.h);
+  } else if (el.warp?.pins?.length) {
+    const pins = el.warp.pins;
+    drawMesh(ctx, img, { x: 0, y: 0, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height }, (u, v) => mlsPoint(pins, u * el.w, v * el.h), 12, 12);
+  } else {
+    ctx.imageSmoothingEnabled = el.smoothing !== false;
+    ctx.drawImage(img, 0, 0, el.w, el.h);
+  }
+  ctx.restore();
+}
+
+function perspectiveOf(doc) {
+  const p = doc.perspective || {};
+  return { angle: p.angle ?? 55, x: p.x ?? doc.width / 2, y: p.y ?? doc.height / 2 };
 }
 
 function drawInstance(ctx, doc, el, env, depth) {
   const sym = symbolById(doc, el.symbolId);
   if (!sym || depth >= MAX_DEPTH) return;
-  const f = instanceFrame(sym, el, env.offset || 0, env.mcTime || 0, env.playMC);
-  ctx.save();
-  ctx.transform(...el.matrix);
+  let f = instanceFrame(sym, el, env.offset || 0, env.mcTime || 0, env.playMC);
+  if (env.rt) f = env.rt.frameOf(env.path, el, sym, f);
   const inner = {
     outline: env.outline,
     outlinePx: env.outlinePx,
@@ -442,10 +584,81 @@ function drawInstance(ctx, doc, el, env, depth) {
     depth: depth + 1,
     includeHidden: false,
     camera: false,
+    rt: env.rt,
+    path: env.path,
   };
-  const draw = (c) => renderTimeline(c, doc, sym, f, inner);
-  if (env.outline) draw(ctx);
-  else drawWithColor(ctx, colorToCT(el.color), depth, draw);
+  const content = (c) => renderTimeline(c, doc, sym, f, inner);
+  if (env.rt) {
+    // área de clique: o quadro "Área" do botão (4º), se tiver conteúdo; senão o que aparece
+    const hb = (sym.type === 'button' && quickBounds(doc, sym, 3, layerFrame, symbolById)) || quickBounds(doc, sym, f, layerFrame, symbolById);
+    if (hb) env.rt.register(env.path, el, multiply(domToArr(ctx.getTransform()), el.matrix), hb, 'instance', sym);
+  }
+  if (env.outline) {
+    ctx.save();
+    ctx.transform(...el.matrix);
+    content(ctx);
+    ctx.restore();
+    return;
+  }
+  const ct = colorToCT(el.color);
+  const filters = (el.filters || []).filter((x) => x.enabled !== false);
+  const blend = el.blend && el.blend !== 'normal' ? BLEND_MODES[el.blend] : null;
+  const special = has3D(el) || !!sym.scale9 || !!el.cacheAsBitmap;
+  const drawBody = (c) => {
+    if (special) {
+      const b = quickBounds(doc, sym, f, layerFrame, symbolById);
+      if (!b) return;
+      const T0 = c.getTransform();
+      const px = scaleOfTransform(T0);
+      const m = el.matrix;
+      const elScale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
+      if (has3D(el)) {
+        const res = Math.max(0.25, Math.min(4, px * elScale));
+        const img = renderContent(b, res, content, scratchCanvas(`3d${depth}`, 2, 2));
+        draw3D(c, img, b, res, el, perspectiveOf(doc), doc.width);
+        return;
+      }
+      if (sym.scale9) {
+        const res = Math.max(0.5, Math.min(4, px));
+        const img = renderContent(b, res, content, scratchCanvas(`9s${depth}`, 2, 2));
+        drawNineSlice(c, img, b, res, sym.scale9, m);
+        return;
+      }
+      const res = Math.max(0.25, Math.min(4, px * elScale));
+      const img = cachedContent(`${sym.id}:${f}:${JSON.stringify(el.color || '')}`, b, res, content);
+      c.save();
+      c.transform(...m);
+      c.drawImage(img, b.x - 1 / res, b.y - 1 / res, img.width / res, img.height / res);
+      c.restore();
+      return;
+    }
+    c.save();
+    c.transform(...el.matrix);
+    content(c);
+    c.restore();
+  };
+  if (!filters.length && !blend) {
+    if (ct) drawWithColor(ctx, ct, depth, drawBody);
+    else drawBody(ctx);
+    return;
+  }
+  // camada própria: conteúdo + cor + filtros, depois compõe com o modo de mesclagem
+  const w = ctx.canvas.width, h = ctx.canvas.height;
+  const layer = scratchCanvas(`L${depth}`, w, h);
+  const lc = layer.getContext('2d');
+  lc.setTransform(1, 0, 0, 1, 0, 0);
+  lc.globalCompositeOperation = 'source-over';
+  lc.globalAlpha = 1;
+  lc.filter = 'none';
+  lc.clearRect(0, 0, w, h);
+  lc.setTransform(ctx.getTransform());
+  if (ct) drawWithColor(lc, ct, depth + 40, drawBody);
+  else drawBody(lc);
+  const out = filters.length ? applyFilters(layer, filters, scaleOfTransform(ctx.getTransform()), scratchCanvas, `F${depth}`) : layer;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (blend) ctx.globalCompositeOperation = blend;
+  ctx.drawImage(out, 0, 0);
   ctx.restore();
 }
 
@@ -482,6 +695,8 @@ export function renderTimeline(ctx, doc, tl, frame, opts = {}) {
         mcTime: it.mcTime,
         playMC: opts.playMC,
         depth: opts.depth || 0,
+        rt: opts.rt,
+        path: opts.path,
       });
     }
     c.restore();

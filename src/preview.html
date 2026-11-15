@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:" />
     <title>Testar cena</title>
     <style>
       html,
@@ -20,6 +20,25 @@
         width: 100%;
         height: calc(100% - 28px);
       }
+      footer button {
+        background: #2e2e34;
+        color: #ddd;
+        border: 1px solid #44444c;
+        border-radius: 4px;
+        padding: 1px 8px;
+        font: inherit;
+        cursor: pointer;
+      }
+      #log {
+        color: #ffd60a;
+        max-width: 50%;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      body {
+        position: relative;
+      }
       footer {
         height: 28px;
         display: flex;
@@ -31,7 +50,7 @@
   </head>
   <body>
     <canvas id="player"></canvas>
-    <footer id="info">Carregando…</footer>
+    <footer><span id="info">Carregando…</span><button id="pause">Pausar</button><span id="log"></span></footer>
     <script type="module" src="preview.js"></script>
   </body>
 </html>

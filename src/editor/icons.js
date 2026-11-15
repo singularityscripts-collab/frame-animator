@@ -57,3 +57,26 @@ export const icons = {
   curve: svg('<path d="M3 20h18M3 20V4"/><path d="M5 18c6 0 6-12 14-12" stroke-width="2.2"/>'),
   exportIcon: svg('<path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/>'),
 };
+
+// ícones das ferramentas da fase final
+Object.assign(icons, {
+  subselect: svg('<path d="M6 3.5 18 13l-5.6.9 3.3 6.3-2.4 1.2-3.3-6.3L6 19z" stroke-width="1.4"/>'),
+  lasso: svg('<path d="M7 16c-3-1.5-3.5-5 0-8s11-3.2 12.5 0-3 7-9 6.5"/><path d="M7 16c-1 1.5 0 4 2.5 4"/>'),
+  transform: svg('<rect x="5" y="5" width="14" height="14" stroke-dasharray="2 2"/><rect x="3" y="3" width="4" height="4" fill="currentColor"/><rect x="17" y="3" width="4" height="4" fill="currentColor"/><rect x="3" y="17" width="4" height="4" fill="currentColor"/><rect x="17" y="17" width="4" height="4" fill="currentColor"/>'),
+  threeD: svg('<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="M12 12 20 7.5M12 12v9M12 12 4 7.5"/>'),
+  pen: svg('<path d="M12 3l5 8-5 9-5-9z"/><circle cx="12" cy="11" r="1.3" fill="currentColor"/><path d="M12 3v8"/>'),
+  penAdd: svg('<path d="M10 4l4 7-4 8-4-8z"/><path d="M18 14v6M15 17h6"/>'),
+  penDelete: svg('<path d="M10 4l4 7-4 8-4-8z"/><path d="M15 17h6"/>'),
+  penConvert: svg('<path d="M4 18 12 6l8 12"/><circle cx="12" cy="6" r="1.6" fill="currentColor"/><path d="M6 6h12" stroke-dasharray="2 2"/>'),
+  text: svg('<path d="M5 6V4h14v2M12 4v16M9 20h6"/>'),
+  polystar: svg('<path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 17l-5.2 2.7 1-5.9-4.3-4.1 5.9-.8z"/>'),
+  width: svg('<path d="M3 12c4-6 7 6 9 0s5-6 9 0" stroke-width="1.2"/><path d="M12 7v10M10 9l2-2 2 2M10 15l2 2 2-2"/>'),
+  bone: svg('<circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M7.6 16.4 16.4 7.6"/>'),
+  warp: svg('<path d="M4 6c5-2 11 2 16 0M4 12c5-2 11 2 16 0M4 18c5-2 11 2 16 0M7 4c-2 5 2 11 0 16M12 4c-2 5 2 11 0 16M17 4c-2 5 2 11 0 16" stroke-width="1.1"/><circle cx="12" cy="12" r="2" fill="currentColor"/>'),
+  rotateView: svg('<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v4h-4"/><rect x="9" y="9" width="6" height="6" transform="rotate(20 12 12)"/>'),
+  objectDraw: svg('<rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="3 2"/><circle cx="12" cy="12" r="4"/>'),
+  align: svg('<path d="M4 3v18"/><rect x="6" y="6" width="12" height="4" rx="1"/><rect x="6" y="14" width="7" height="4" rx="1"/>'),
+  script: svg('<path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/>'),
+  component: svg('<rect x="3" y="7" width="18" height="10" rx="3"/><path d="M8 12h8"/>'),
+  image: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 8"/>'),
+});

@@ -1,6 +1,7 @@
 // Geometria do editor: criação de formas, limites (bounds) e suavização do lápis.
 
-import { applyPoint, symbolById, layerFrame, instanceFrame, subpaths, isGradient } from '../player/render.js';
+import { applyPoint, symbolById, layerFrame, instanceFrame, subpaths, isGradient, shapePath } from '../player/render.js';
+import { textBox } from '../player/assets.js';
 import { uid } from './document.js';
 
 const K = 0.5522847498; // constante para aproximar elipse com Bézier
@@ -138,7 +139,9 @@ const EMPTY = Object.freeze({ x: 0, y: 0, w: 0, h: 0 });
 
 /** Limites do elemento no seu próprio espaço (forma: o caminho; instância: o conteúdo do símbolo). */
 export function elementLocalBounds(el, doc, offset = 0, mcTime = 0, depth = 0) {
-  if (el.type === 'shape') return pathBounds(el.path);
+  if (el.type === 'shape') return pathBounds(el.warp?.pins?.length ? shapePath(el) : el.path);
+  if (el.type === 'text') return textBox(el);
+  if (el.type === 'bitmap' || el.type === 'component') return { x: 0, y: 0, w: el.w || 0, h: el.h || 0 };
   const sym = doc && symbolById(doc, el.symbolId);
   if (!sym || depth > 20) return EMPTY;
   return timelineBounds(doc, sym, instanceFrame(sym, el, offset, mcTime, false), depth + 1) || EMPTY;
@@ -152,6 +155,10 @@ export function timelineBounds(doc, tl, frame, depth = 0) {
     const lf = layerFrame(layer, frame);
     if (!lf) continue;
     for (const it of lf.items) {
+      if (it.el.type !== 'instance' && it.el.type !== 'shape') {
+        pts.push(...localBoxCorners(it.el.matrix, elementLocalBounds(it.el, doc)));
+        continue;
+      }
       if (it.el.type === 'instance') {
         const sym = symbolById(doc, it.el.symbolId);
         if (!sym) continue;

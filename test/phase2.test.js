@@ -148,7 +148,7 @@ test('arquivo da versão 1 abre com biblioteca vazia', () => {
     scenes: [{ id: 's1', name: 'Cena 1', layers: [{ id: 'l1', name: 'C', frames: [{ start: 0, duration: 2, elements: [] }] }] }],
   };
   const d = parseDocument(JSON.stringify(v1));
-  assert.deepEqual(d.library, { folders: [], items: [], sounds: [] });
+  assert.deepEqual(d.library, { folders: [], items: [], sounds: [], bitmaps: [] });
   assert.equal(d.version, VERSION);
   const ed = new Editor();
   ed.addElements([shape(0)]);

@@ -6,6 +6,8 @@ const fs = require('node:fs/promises');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
+const { html5Files } = require('./bundler.cjs');
 
 // ffmpeg embutido (no app empacotado ele fica fora do .asar)
 const FFMPEG = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
@@ -252,6 +254,65 @@ function smokeTest() {
       if (!/Audio: aac/.test(probe)) throw new Error('o MP4 saiu sem faixa de áudio');
       await fs.unlink(sres.path);
       console.log('ok: export de todas as cenas (15 quadros) com áudio AAC no MP4');
+
+      // Fase 5: ferramentas e painéis novos, exports HTML5/Lottie/SVG/sprite sheet e o pacote HTML5 rodando
+      const p5 = await js(`(async () => {
+        const { editor: e, stage, actions, panels } = window.__fa;
+        const g = await import('./model/geometry.js');
+        e.load((await import('./model/document.js')).createDocument({ width: 200, height: 100, fps: 10 }), null);
+        const sq = g.makeShape({ path: g.rectPath(40, 40), cx: 50, cy: 50, fill: '#ff0000', stroke: '#000000', strokeWidth: 2 });
+        e.addElements([sq]);
+        e.setSelection([sq.id]);
+        e.convertToSymbol({ name: 'Botao', type: 'button' });
+        e.updateSelection('n', (el) => { el.name = 'botao'; el.filters = [{ type: 'dropShadow', distance: 4, angle: 45, blur: 4, color: '#000000', alpha: 60, strength: 1, enabled: true }]; });
+        e.addText(100, 10, 'Oi', { kind: 'dynamic', name: 'placar' });
+        e.setFrame(9); e.timelineOp('insertFrame'); e.setFrame(0);
+        e.setSpanScript("this.stop(); this.getChild('botao').on('click', () => { this.getChild('placar').text = 'clicou'; this.gotoAndStop(5); });");
+        const tools = Object.keys(stage.tools).length;
+        const tabs = document.querySelectorAll('.dock .tab').length;
+        panels.show('actions');
+        const code = document.querySelector('.ap-code').value;
+        const L = await import('./export/lottie.js');
+        const S = await import('./export/svg.js');
+        const lottie = L.toLottie(e.doc, {});
+        const svg = S.frameToSVG(e.doc, 0, 0, {});
+        return { tools, tabs, code, lottieLayers: lottie.layers.length, svgPaths: (svg.match(/<path/g) || []).length };
+      })()`);
+      if (p5.tools < 27 || !/this\.stop/.test(p5.code) || p5.lottieLayers < 2 || p5.svgPaths < 2) throw new Error(`fase 5 no editor: ${JSON.stringify(p5)}`);
+      console.log(`ok: ${p5.tools} ferramentas, painéis encaixáveis, painel Ações com o script, Lottie (${p5.lottieLayers} camadas) e SVG`);
+      const h5dir = path.join(app.getPath('temp'), `fa-smoke-html5-${Date.now()}`);
+      const h5 = await js(`window.api.exportHTML5({ doc: JSON.stringify(window.__fa.editor.doc), options: { loop: true, scale: 'fit', title: 'Smoke' }, dir: ${JSON.stringify(h5dir)} })`);
+      if (!h5?.path) throw new Error('export HTML5 não devolveu caminho');
+      const h5win = new BrowserWindow({ width: 400, height: 300, show: false, webPreferences: { contextIsolation: true, sandbox: true } });
+      const h5errors = [];
+      h5win.webContents.on('console-message', (e) => e.level === 'error' && h5errors.push(e.message));
+      await h5win.loadFile(h5.path);
+      await wait(700);
+      const before = await h5win.webContents.executeJavaScript(`({ ok: !!window.faRuntime, frame: window.faRuntime && window.faRuntime.frame, w: document.getElementById('fa-stage').width })`);
+      // clica no botão (o runtime registra a área de clique ao desenhar)
+      const hit = await h5win.webContents.executeJavaScript(`(() => {
+        const rt = window.faRuntime, c = document.getElementById('fa-stage');
+        const h = rt.hits.find((x) => x.path.endsWith('/botao'));
+        if (!h) return { erro: 'sem área de clique' };
+        const r = c.getBoundingClientRect();
+        const p = { x: h.m[0] * (h.box.x + h.box.w / 2) + h.m[2] * (h.box.y + h.box.h / 2) + h.m[4], y: h.m[1] * (h.box.x + h.box.w / 2) + h.m[3] * (h.box.y + h.box.h / 2) + h.m[5] };
+        const cx = r.left + (p.x * r.width) / c.width, cy = r.top + (p.y * r.height) / c.height;
+        for (const t of ['pointerdown', 'pointerup']) (t === 'pointerup' ? window : c).dispatchEvent(new PointerEvent(t, { clientX: cx, clientY: cy, bubbles: true }));
+        return { frame: rt.frame, text: rt.texts.get('/' + (rt.doc.scenes[0].layers[0].frames[0].elements.find((x) => x.name === 'placar') ? 'placar' : '')) };
+      })()`);
+      h5win.destroy();
+      await fs.rm(h5dir, { recursive: true, force: true });
+      if (!before.ok || before.frame !== 0 || !before.w) throw new Error(`HTML5 não iniciou: ${JSON.stringify(before)}`);
+      if (hit.erro || hit.frame !== 4) throw new Error(`HTML5: clique no botão não funcionou: ${JSON.stringify(hit)}`);
+      if (h5errors.length) throw new Error(`HTML5 com erros no console: ${h5errors.join(' | ')}`);
+      console.log(`ok: pacote HTML5 roda sozinho (parado no quadro 1 pelo script; clique no botão → quadro ${hit.frame + 1})`);
+      const files5 = await js(`(async () => {
+        const SP = await import('./export/spritesheet.js');
+        const { canvas, json } = await SP.buildSpriteSheet(window.__fa.editor.doc, { trim: true });
+        return { w: canvas.width, h: canvas.height, frames: Object.keys(json.frames).length };
+      })()`);
+      if (files5.frames !== 10 || !files5.w) throw new Error(`sprite sheet: ${JSON.stringify(files5)}`);
+      console.log(`ok: sprite sheet ${files5.w}×${files5.h} com ${files5.frames} quadros`);
       console.log('SMOKE OK');
     } catch (err) {
       fail(err.message);
@@ -267,8 +328,10 @@ function send(action) {
 
 // Os atalhos aparecem no menu, mas quem trata as teclas é o editor (registerAccelerator: false),
 // para que funcionem igual no menu, nos botões e dentro de campos de texto.
+let customKeys = {}; // ação → atalho (vindo da tela de atalhos)
 function item(label, action, accelerator) {
-  return { label, accelerator, registerAccelerator: false, click: send(action) };
+  const custom = customKeys[action];
+  return { label, accelerator: custom === undefined ? accelerator : custom || undefined, registerAccelerator: false, click: send(action) };
 }
 
 function buildMenu() {
@@ -282,10 +345,23 @@ function buildMenu() {
         item('Salvar', 'save', 'CmdOrCtrl+S'),
         item('Salvar como…', 'saveAs', 'CmdOrCtrl+Shift+S'),
         { type: 'separator' },
+        item('Importar imagem…', 'importImage', 'CmdOrCtrl+Alt+I'),
         item('Importar som…', 'importSound'),
+        item('Importar do Animate (.fla / XFL)…', 'importAnimate'),
         { type: 'separator' },
         item('Testar filme', 'testScene', 'CmdOrCtrl+Enter'),
-        item('Exportar animação…', 'exportMedia', 'CmdOrCtrl+Alt+Shift+S'),
+        {
+          label: 'Exportar',
+          submenu: [
+            item('Vídeo, GIF ou PNG…', 'exportMedia', 'CmdOrCtrl+Alt+Shift+S'),
+            item('HTML5 Canvas (interativo)…', 'exportHTML5'),
+            item('Lottie (JSON)…', 'exportLottie'),
+            item('Sprite sheet + JSON…', 'exportSprites'),
+            item('SVG por quadro…', 'exportSVG'),
+          ],
+        },
+        item('Configurações de publicação…', 'publishSettings', 'CmdOrCtrl+Shift+F12'),
+        item('Publicar', 'publish', 'Shift+F12'),
         { type: 'separator' },
         { label: 'Sair', role: 'quit' },
       ],
@@ -305,6 +381,10 @@ function buildMenu() {
         { type: 'separator' },
         item('Selecionar tudo', 'selectAll', 'CmdOrCtrl+A'),
         item('Desmarcar tudo', 'deselect', 'CmdOrCtrl+Shift+A'),
+        { type: 'separator' },
+        item('Localizar e substituir…', 'findReplace', 'CmdOrCtrl+F'),
+        item('Atalhos de teclado…', 'keyboardShortcuts'),
+        item('Scripts do editor…', 'editorScripts'),
       ],
     },
     {
@@ -327,6 +407,12 @@ function buildMenu() {
         item('Apagar cena', 'deleteScene'),
         { type: 'separator' },
         item('Câmera (liga/desliga)', 'toggleCamera'),
+        { type: 'separator' },
+        item('Texto', 'toolText', 'T'),
+        {
+          label: 'Componente',
+          submenu: [item('Botão', 'insertButtonComponent'), item('Lista', 'insertListComponent'), item('Vídeo', 'insertVideoComponent')],
+        },
       ],
     },
     {
@@ -336,6 +422,31 @@ function buildMenu() {
         { type: 'separator' },
         item('Distribuir para keyframes', 'distributeToKeyframes', 'CmdOrCtrl+Shift+K'),
         item('Distribuir para camadas', 'distributeToLayers', 'CmdOrCtrl+Shift+D'),
+        { type: 'separator' },
+        item('Separar (break apart)', 'breakApart', 'CmdOrCtrl+B'),
+        item('Otimizar curvas…', 'optimizeCurves', 'CmdOrCtrl+Alt+Shift+C'),
+        item('Vetorizar bitmap…', 'traceBitmap'),
+        item('Desenho de objeto (liga/desliga)', 'toggleObjectDrawing', 'J'),
+        { type: 'separator' },
+        item('Escala de 9 fatias…', 'scale9'),
+        item('Seletor de quadro…', 'framePicker'),
+        item('Lip-sync automático…', 'lipSync'),
+        {
+          label: 'Alinhar',
+          submenu: [
+            item('Esquerda', 'alignLeft', 'CmdOrCtrl+Alt+1'),
+            item('Centro horizontal', 'alignHCenter', 'CmdOrCtrl+Alt+2'),
+            item('Direita', 'alignRight', 'CmdOrCtrl+Alt+3'),
+            item('Topo', 'alignTop', 'CmdOrCtrl+Alt+4'),
+            item('Centro vertical', 'alignVCenter', 'CmdOrCtrl+Alt+5'),
+            item('Base', 'alignBottom', 'CmdOrCtrl+Alt+6'),
+            { type: 'separator' },
+            item('Distribuir na horizontal', 'distributeH', 'CmdOrCtrl+Alt+7'),
+            item('Distribuir na vertical', 'distributeV', 'CmdOrCtrl+Alt+9'),
+            item('Mesma largura', 'matchWidth'),
+            item('Mesma altura', 'matchHeight'),
+          ],
+        },
         {
           label: 'Combinar objetos',
           submenu: [
@@ -359,6 +470,19 @@ function buildMenu() {
         item('Diminuir zoom', 'zoomOut', 'CmdOrCtrl+-'),
         item('100%', 'zoom100', 'CmdOrCtrl+1'),
         item('Ajustar à janela', 'zoomFit', 'CmdOrCtrl+0'),
+        { type: 'separator' },
+        item('Girar a vista para 0°', 'resetRotation'),
+        { type: 'separator' },
+        item('Réguas', 'toggleRulers', 'CmdOrCtrl+Alt+Shift+R'),
+        item('Grade', 'toggleGrid', "CmdOrCtrl+'"),
+        item('Guias', 'toggleGuides', 'CmdOrCtrl+;'),
+        item('Travar guias', 'lockGuides', 'CmdOrCtrl+Alt+;'),
+        item('Limpar guias', 'clearGuides'),
+        item('Grade e guias…', 'gridSettings'),
+        {
+          label: 'Encaixar',
+          submenu: [item('Na grade', 'snapGrid', "CmdOrCtrl+Shift+'"), item('Nas guias', 'snapGuides', 'CmdOrCtrl+Shift+;'), item('Em objetos', 'snapObjects', 'CmdOrCtrl+Shift+/')],
+        },
         { type: 'separator' },
         item('Onion skin', 'toggleOnion', 'Alt+Shift+O'),
         { type: 'separator' },
@@ -403,6 +527,20 @@ function buildMenu() {
         { type: 'separator' },
         item('Cena anterior', 'prevScene', 'Shift+PageUp'),
         item('Próxima cena', 'nextScene', 'Shift+PageDown'),
+      ],
+    },
+    {
+      label: '&Janela',
+      submenu: [
+        item('Ações (código do quadro)', 'showActions', 'F9'),
+        item('Alinhar', 'showAlign', 'CmdOrCtrl+K'),
+        item('Explorador de cenas', 'showSceneExplorer', 'Alt+F3'),
+        item('Componentes', 'showComponents', 'CmdOrCtrl+F7'),
+        item('Propriedades', 'showProps', 'CmdOrCtrl+F3'),
+        { type: 'separator' },
+        item('Salvar layout…', 'saveLayout'),
+        item('Layouts salvos…', 'manageLayouts'),
+        item('Restaurar layout padrão', 'resetLayout'),
       ],
     },
     {
@@ -627,6 +765,120 @@ ipcMain.handle('file:open-audio', async () => {
   if (stat.size > 200 * 1024 * 1024) throw new Error('Arquivo de áudio muito grande (máximo 200 MB).');
   const ext = path.extname(p).slice(1).toLowerCase();
   return { name: path.basename(p), mime: AUDIO_TYPES[ext] || 'audio/mpeg', data: (await fs.readFile(p)).toString('base64') };
+});
+
+// ---------- fase final: imagens, vídeo, Animate, exports em pasta, atalhos ----------
+const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml' };
+async function openBinary(title, types, maxMB) {
+  const r = await dialog.showOpenDialog(win, { title, filters: [{ name: title, extensions: Object.keys(types) }], properties: ['openFile', 'multiSelections'] });
+  if (r.canceled || !r.filePaths.length) return null;
+  const out = [];
+  for (const p of r.filePaths) {
+    const stat = await fs.stat(p);
+    if (stat.size > maxMB * 1024 * 1024) throw new Error(`${path.basename(p)} é muito grande (máximo ${maxMB} MB).`);
+    const ext = path.extname(p).slice(1).toLowerCase();
+    out.push({ name: path.basename(p, path.extname(p)), mime: types[ext] || 'application/octet-stream', data: (await fs.readFile(p)).toString('base64') });
+  }
+  return out;
+}
+ipcMain.handle('file:open-image', () => openBinary('Imagens', IMAGE_TYPES, 60));
+ipcMain.handle('file:open-video', async () => (await openBinary('Vídeos', { mp4: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg', mov: 'video/quicktime' }, 150))?.[0] || null);
+
+/** Lê um zip (o .fla é um zip com o XFL dentro). Devolve { caminho: Buffer }. */
+function readZip(buf) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error('Arquivo .fla inválido (não é um zip).');
+  const count = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+  const files = {};
+  for (let k = 0; k < count; k++) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) break;
+    const method = buf.readUInt16LE(p + 10);
+    const csize = buf.readUInt32LE(p + 20);
+    const nlen = buf.readUInt16LE(p + 28), xlen = buf.readUInt16LE(p + 30), clen = buf.readUInt16LE(p + 32);
+    const local = buf.readUInt32LE(p + 42);
+    const name = buf.toString('utf8', p + 46, p + 46 + nlen);
+    p += 46 + nlen + xlen + clen;
+    if (name.endsWith('/')) continue;
+    const lstart = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    const raw = buf.subarray(lstart, lstart + csize);
+    files[name] = method === 8 ? zlib.inflateRawSync(raw) : Buffer.from(raw);
+  }
+  return files;
+}
+
+async function readDirRec(dir, base = dir, out = {}) {
+  for (const ent of await fs.readdir(dir, { withFileTypes: true })) {
+    const full = path.join(dir, ent.name);
+    if (ent.isDirectory()) await readDirRec(full, base, out);
+    else out[path.relative(base, full).split(path.sep).join('/')] = await fs.readFile(full);
+  }
+  return out;
+}
+
+ipcMain.handle('file:open-animate', async () => {
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Importar do Animate',
+    filters: [{ name: 'Animate (.fla, .xfl)', extensions: ['fla', 'xfl'] }],
+    properties: ['openFile'],
+  });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const p = r.filePaths[0];
+  const raw = path.extname(p).toLowerCase() === '.fla' ? readZip(await fs.readFile(p)) : await readDirRec(path.dirname(p));
+  // XML vai como texto; o resto (imagens, sons) como base64
+  const files = {};
+  for (const [k, v] of Object.entries(raw)) files[k] = /\.(xml|xfl)$/i.test(k) ? { text: v.toString('utf8') } : { base64: v.toString('base64') };
+  return { name: path.basename(p, path.extname(p)), files };
+});
+
+/** Grava vários arquivos numa pasta nova (o usuário escolhe o nome) ou um arquivo só. */
+ipcMain.handle('export:write', async (_e, o) => {
+  const single = o.files.length === 1 && !o.folder;
+  const r = await dialog.showSaveDialog(win, {
+    title: o.title || 'Exportar',
+    defaultPath: single ? o.files[0].name : o.defaultName,
+    filters: single ? [{ name: o.filterName || 'Arquivo', extensions: [path.extname(o.files[0].name).slice(1)] }] : [{ name: 'Pasta', extensions: ['*'] }],
+  });
+  if (r.canceled || !r.filePath) return null;
+  if (single) {
+    const f = o.files[0];
+    await fs.writeFile(r.filePath, f.base64 ? Buffer.from(f.base64, 'base64') : f.text);
+    return { path: r.filePath };
+  }
+  const dir = r.filePath.replace(/\.[^\\/.]+$/, '');
+  await fs.mkdir(dir, { recursive: true });
+  for (const f of o.files) {
+    const target = path.join(dir, f.name);
+    if (!target.startsWith(dir)) continue;
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, f.base64 ? Buffer.from(f.base64, 'base64') : f.text);
+  }
+  return { path: path.join(dir, o.files[0].name) };
+});
+
+ipcMain.handle('export:html5', async (_e, o) => {
+  const doc = JSON.parse(o.doc);
+  const files = html5Files(path.join(__dirname, 'src', 'player'), doc, o.options || {});
+  let dir = o.dir;
+  if (!dir) {
+    const r = await dialog.showSaveDialog(win, { title: 'Exportar HTML5 (nome da pasta)', defaultPath: o.defaultName || 'animacao-html5' });
+    if (r.canceled || !r.filePath) return null;
+    dir = r.filePath.replace(/\.[^\\/.]+$/, '');
+  }
+  await fs.mkdir(dir, { recursive: true });
+  for (const [name, text] of Object.entries(files)) await fs.writeFile(path.join(dir, name), text);
+  return { path: path.join(dir, 'index.html') };
+});
+
+ipcMain.on('keys:set', (_e, map) => {
+  customKeys = map && typeof map === 'object' ? map : {};
+  buildMenu();
 });
 
 ipcMain.on('shell:show', (_e, p) => {
