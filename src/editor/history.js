@@ -29,6 +29,22 @@ export class History {
     this.redoStack.length = 0;
   }
 
+  /** Junta os últimos n comandos (já aplicados) num passo só de desfazer. */
+  squash(n, label) {
+    if (n < 2 || this.undoStack.length < n) return;
+    const cmds = this.undoStack.splice(this.undoStack.length - n, n);
+    this.push({
+      label,
+      cmds,
+      do(ctx) {
+        for (const c of cmds) c.do(ctx);
+      },
+      undo(ctx) {
+        for (let i = cmds.length - 1; i >= 0; i--) cmds[i].undo(ctx);
+      },
+    });
+  }
+
   undo(ctx) {
     const cmd = this.undoStack.pop();
     if (!cmd) return null;

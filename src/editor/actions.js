@@ -1,8 +1,60 @@
 // Registro único de ações: usado pelo teclado, pelo menu do Electron e pelos botões.
 // Os atalhos ficam todos aqui (base para torná-los personalizáveis depois).
 
-export function createActions({ editor, stage, io }) {
+import { openDialog, esc } from './ui-kit.js';
+import { exportDialog } from './export-ui.js';
+import { SYMBOL_TYPES } from '../model/document.js';
+
+export function createActions({ editor, stage, io, ui = {} }) {
   const ed = editor;
+  let lastType = 'graphic';
+
+  /** Diálogo de nome + tipo (+ registro ao converter). */
+  async function symbolDialog(title, name, type, withRegistration) {
+    const opt = (v, l, sel) => `<option value="${v}" ${v === sel ? 'selected' : ''}>${l}</option>`;
+    const r = await openDialog({
+      title,
+      body: `
+        <label class="dlg-row"><span>Nome</span><input type="text" name="name" value="${esc(name)}" required maxlength="80"></label>
+        <label class="dlg-row"><span>Tipo</span><select name="type">${Object.entries(SYMBOL_TYPES).map(([k, l]) => opt(k, l, type)).join('')}</select></label>
+        ${
+          withRegistration
+            ? `<label class="dlg-row"><span>Registro</span><select name="registration">${opt('center', 'Centro', 'center')}${opt('topleft', 'Canto superior esquerdo')}</select></label>
+               <p class="dlg-text">Gráfico acompanha a timeline principal (bom para animar quadro a quadro). Movie clip toca sozinho.</p>`
+            : ''
+        }`,
+    });
+    if (!r) return null;
+    r.name = r.name.trim() || name;
+    lastType = r.type;
+    return r;
+  }
+
+  async function convertToSymbol() {
+    if (!ed.selection.size) return ed.toast('Selecione algo no palco para converter em símbolo.');
+    const r = await symbolDialog('Converter em símbolo', ed.nextSymbolName(), lastType, true);
+    if (r) ed.convertToSymbol(r);
+  }
+
+  async function newSymbol() {
+    const r = await symbolDialog('Novo símbolo', ed.nextSymbolName(), lastType, false);
+    if (r) ed.newSymbol(r);
+  }
+
+  async function symbolProperties(id) {
+    const sym = ed.symbol(id);
+    if (!sym) return;
+    const r = await symbolDialog('Propriedades do símbolo', sym.name, sym.type, false);
+    if (r && (r.name !== sym.name || r.type !== sym.type)) ed.patchLibrary('items', id, { name: r.name, type: r.type }, 'Propriedades do símbolo');
+  }
+
+  function editSymbol() {
+    const items = ed.selectedItems();
+    if (items.length === 1 && items[0].el.type === 'instance') return ed.enterSymbol(items[0].el.symbolId, items[0]);
+    if (ed.editStack.length) return ed.exitSymbol(Infinity);
+    ed.toast('Selecione uma instância de símbolo para editar.');
+  }
+
   const defs = {
     // Arquivo
     new: { keys: ['Ctrl+N'], run: () => io.newDoc() },
@@ -10,6 +62,14 @@ export function createActions({ editor, stage, io }) {
     save: { keys: ['Ctrl+S'], run: () => io.save(false) },
     saveAs: { keys: ['Ctrl+Shift+S'], run: () => io.save(true) },
     testScene: { keys: ['Ctrl+Enter'], run: () => io.testScene() },
+    exportMedia: { keys: ['Ctrl+Alt+Shift+S'], run: () => exportDialog(ed) },
+    // Símbolos e tween
+    convertToSymbol: { keys: ['F8'], run: convertToSymbol },
+    newSymbol: { keys: ['Ctrl+F8'], run: newSymbol },
+    editSymbol: { keys: ['Ctrl+E'], run: editSymbol },
+    showLibrary: { keys: ['Ctrl+L'], run: () => ui.showTab?.('library') },
+    createClassicTween: { keys: [], run: () => ed.createClassicTween() },
+    removeTween: { keys: [], run: () => ed.removeTween() },
     // Editar
     undo: { keys: ['Ctrl+Z'], run: () => ed.undo() },
     redo: { keys: ['Ctrl+Y', 'Ctrl+Shift+Z'], run: () => ed.redo() },
@@ -109,6 +169,7 @@ export function createActions({ editor, stage, io }) {
 
   /** Trata uma tecla. Retorna true se virou ação. */
   function handleKey(e) {
+    if (document.querySelector('dialog[open]')) return false;
     if (isTyping(e.target)) {
       if (e.key === 'Escape') e.target.blur();
       return false;
@@ -120,5 +181,5 @@ export function createActions({ editor, stage, io }) {
     return true;
   }
 
-  return { defs, run, handleKey, comboOf };
+  return { defs, run, handleKey, comboOf, symbolProperties };
 }

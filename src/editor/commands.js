@@ -1,13 +1,20 @@
 // Comandos de edição. Guardam cópias (clone) do antes/depois, então o histórico
 // nunca compartilha objetos com o documento vivo.
-// ctx precisa ter: scene, doc.
+// ctx precisa ter: doc (e frame / activeLayerId, que alguns comandos ajustam).
+// Camadas são achadas pelo id em qualquer timeline (cena ou símbolo).
 
-import { clone } from '../model/document.js';
+import { clone, findLayer, findTimeline } from '../model/document.js';
 
 function layer(ctx, id) {
-  const l = ctx.scene.layers.find((x) => x.id === id);
-  if (!l) throw new Error(`Camada ${id} não encontrada`);
-  return l;
+  const r = findLayer(ctx.doc, id);
+  if (!r) throw new Error(`Camada ${id} não encontrada`);
+  return r.layer;
+}
+
+function timeline(ctx, id) {
+  const t = findTimeline(ctx.doc, id);
+  if (!t) throw new Error(`Timeline ${id} não encontrada`);
+  return t;
 }
 
 function span(ctx, layerId, start) {
@@ -125,38 +132,39 @@ export class SetLayerProps {
 }
 
 export class AddLayer {
-  constructor(index, layerData, label = 'Nova camada') {
-    Object.assign(this, { index, label, layer: clone(layerData) });
+  constructor(tlId, index, layerData, label = 'Nova camada') {
+    Object.assign(this, { tlId, index, label, layer: clone(layerData) });
   }
   do(ctx) {
-    ctx.scene.layers.splice(this.index, 0, clone(this.layer));
+    timeline(ctx, this.tlId).layers.splice(this.index, 0, clone(this.layer));
     ctx.activeLayerId = this.layer.id;
   }
   undo(ctx) {
-    ctx.scene.layers.splice(this.index, 1);
+    timeline(ctx, this.tlId).layers.splice(this.index, 1);
   }
 }
 
 export class RemoveLayer {
-  constructor(index, layerData, label = 'Apagar camada') {
-    Object.assign(this, { index, label, layer: clone(layerData) });
+  constructor(tlId, index, layerData, label = 'Apagar camada') {
+    Object.assign(this, { tlId, index, label, layer: clone(layerData) });
   }
   do(ctx) {
-    ctx.scene.layers.splice(this.index, 1);
+    timeline(ctx, this.tlId).layers.splice(this.index, 1);
   }
   undo(ctx) {
-    ctx.scene.layers.splice(this.index, 0, clone(this.layer));
+    timeline(ctx, this.tlId).layers.splice(this.index, 0, clone(this.layer));
     ctx.activeLayerId = this.layer.id;
   }
 }
 
 export class MoveLayer {
-  constructor(from, to, label = 'Mover camada') {
-    Object.assign(this, { from, to, label });
+  constructor(tlId, from, to, label = 'Mover camada') {
+    Object.assign(this, { tlId, from, to, label });
   }
   move(ctx, a, b) {
-    const [l] = ctx.scene.layers.splice(a, 1);
-    ctx.scene.layers.splice(b, 0, l);
+    const layers = timeline(ctx, this.tlId).layers;
+    const [l] = layers.splice(a, 1);
+    layers.splice(b, 0, l);
   }
   do(ctx) {
     this.move(ctx, this.from, this.to);
@@ -175,5 +183,69 @@ export class SetDocProps {
   }
   undo(ctx) {
     Object.assign(ctx.doc, clone(this.before));
+  }
+}
+
+/** Propriedades de um keyframe (ex.: tween). Valor undefined apaga a propriedade. */
+export class SetSpanProps {
+  constructor(layerId, start, before, after, label = 'Quadro') {
+    Object.assign(this, { layerId, start, label, before: clone(before), after: clone(after) });
+  }
+  apply(ctx, props) {
+    const s = span(ctx, this.layerId, this.start);
+    for (const [k, v] of Object.entries(props)) {
+      if (v === undefined || v === null) delete s[k];
+      else s[k] = clone(v);
+    }
+  }
+  do(ctx) {
+    this.apply(ctx, this.after);
+  }
+  undo(ctx) {
+    this.apply(ctx, this.before);
+  }
+}
+
+// ---------- biblioteca ----------
+// kind: 'items' (símbolos) ou 'folders'
+
+export class InsertLibraryEntry {
+  constructor(kind, index, data, label = 'Biblioteca') {
+    Object.assign(this, { kind, index, label, data: clone(data) });
+  }
+  do(ctx) {
+    ctx.doc.library[this.kind].splice(this.index, 0, clone(this.data));
+  }
+  undo(ctx) {
+    const list = ctx.doc.library[this.kind];
+    list.splice(list.findIndex((x) => x.id === this.data.id), 1);
+  }
+}
+
+export class DeleteLibraryEntry {
+  constructor(kind, index, data, label = 'Apagar da biblioteca') {
+    Object.assign(this, { kind, index, label, data: clone(data) });
+  }
+  do(ctx) {
+    const list = ctx.doc.library[this.kind];
+    list.splice(list.findIndex((x) => x.id === this.data.id), 1);
+  }
+  undo(ctx) {
+    ctx.doc.library[this.kind].splice(this.index, 0, clone(this.data));
+  }
+}
+
+export class PatchLibraryEntry {
+  constructor(kind, id, before, after, label = 'Biblioteca') {
+    Object.assign(this, { kind, id, label, before: clone(before), after: clone(after) });
+  }
+  apply(ctx, props) {
+    Object.assign(ctx.doc.library[this.kind].find((x) => x.id === this.id), clone(props));
+  }
+  do(ctx) {
+    this.apply(ctx, this.after);
+  }
+  undo(ctx) {
+    this.apply(ctx, this.before);
   }
 }

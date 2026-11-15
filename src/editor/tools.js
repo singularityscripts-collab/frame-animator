@@ -88,12 +88,24 @@ function selectTool(stage, editor) {
     move(e) {
       if (!st) return;
       if (!st.moved && Math.hypot(e.sx - st.start.sx, e.sy - st.start.sy) < 3) return;
-      st.moved = true;
       if (st.mode === 'marquee') {
+        st.moved = true;
         st.cur = e;
         stage.invalidate();
         return;
       }
+      if (!st.moved) {
+        // num quadro interpolado de tween, cria o keyframe antes de mexer
+        if (editor.materialize()) {
+          st.materialized = true;
+          st.before = snapshot();
+          if (st.fr) {
+            st.fr = stage.selectionFrame();
+            st.Finv = invert(st.fr.F);
+          }
+        }
+      }
+      st.moved = true;
       let W;
       if (st.mode === 'move') {
         let dx = e.wx - st.start.wx, dy = e.wy - st.start.wy;
@@ -152,6 +164,7 @@ function selectTool(stage, editor) {
       if (!s.moved) return;
       const label = { move: 'Mover', scale: 'Escalar', rotate: 'Girar' }[s.mode];
       editor.commitLiveEdit(label, s.before);
+      if (s.materialized) editor.history.squash(2, label);
     },
 
     cancel() {
@@ -218,14 +231,14 @@ function boxShapeTool(stage, editor, kind) {
       const g = geometry(e);
       st = null;
       stage.invalidate();
-      if (g.w * stage.view.zoom < 2 || g.h * stage.view.zoom < 2) return;
+      if (g.w * stage.scale < 2 || g.h * stage.scale < 2) return;
       editor.addElements([build(g)], kind === 'rect' ? 'Retângulo' : 'Oval');
     },
     cancel() {
       st = null;
     },
     drawWorld(ctx) {
-      if (st?.preview) drawElement(ctx, st.preview);
+      if (st?.preview) drawElement(ctx, editor.doc, st.preview);
     },
   };
 }
@@ -262,7 +275,7 @@ function lineTool(stage, editor) {
     up(e) {
       if (!st) return;
       const p = end(e);
-      const ok = Math.hypot(p.x - st.x0, p.y - st.y0) * stage.view.zoom >= 2;
+      const ok = Math.hypot(p.x - st.x0, p.y - st.y0) * stage.scale >= 2;
       const el = ok && build(p);
       st = null;
       stage.invalidate();
@@ -272,7 +285,7 @@ function lineTool(stage, editor) {
       st = null;
     },
     drawWorld(ctx) {
-      if (st?.preview) drawElement(ctx, st.preview);
+      if (st?.preview) drawElement(ctx, editor.doc, st.preview);
     },
   };
 }
@@ -288,7 +301,7 @@ function pencilTool(stage, editor) {
     move(e) {
       if (!pts) return;
       const last = pts[pts.length - 1];
-      if (Math.hypot(e.wx - last.x, e.wy - last.y) * stage.view.zoom < 1.5) return;
+      if (Math.hypot(e.wx - last.x, e.wy - last.y) * stage.scale < 1.5) return;
       pts.push({ x: e.wx, y: e.wy });
       stage.invalidate();
     },
@@ -299,7 +312,7 @@ function pencilTool(stage, editor) {
       stage.invalidate();
       if (p.length < 2) return;
       const s = editor.style;
-      const { path, cx, cy } = freehandPath(p, 1.2 / stage.view.zoom);
+      const { path, cx, cy } = freehandPath(p, 1.2 / stage.scale);
       editor.addElements([makeShape({ path, cx, cy, fill: null, stroke: s.stroke, strokeWidth: Math.max(1, s.strokeWidth) })], 'Lápis');
     },
     cancel() {

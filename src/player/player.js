@@ -1,7 +1,7 @@
 // Reprodução: avança quadros no ritmo do FPS do documento.
 // O mesmo Player toca a animação no palco do editor e na janela de teste.
 
-import { renderScene, sceneLength } from './render.js';
+import { renderTimeline, sceneLength } from './render.js';
 
 export class Player {
   /**
@@ -85,7 +85,7 @@ export function mountPlayer(canvas, doc, { sceneIndex = 0, loop = true } = {}) {
     ctx.beginPath();
     ctx.rect(0, 0, doc.width, doc.height);
     ctx.clip();
-    renderScene(ctx, scene, frame);
+    renderTimeline(ctx, doc, scene, frame, { playMC: true });
     ctx.restore();
   }
 

@@ -1,6 +1,6 @@
 // Geometria do editor: criação de formas, limites (bounds) e suavização do lápis.
 
-import { applyPoint } from '../player/render.js';
+import { applyPoint, symbolById, layerFrame, instanceFrame } from '../player/render.js';
 import { uid } from './document.js';
 
 const K = 0.5522847498; // constante para aproximar elipse com Bézier
@@ -118,9 +118,40 @@ export function pointsBounds(points) {
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
-/** Caixa alinhada aos eixos do elemento no mundo. */
-export function elementWorldBounds(el) {
-  return pointsBounds(localBoxCorners(el.matrix, pathBounds(el.path)));
+const EMPTY = Object.freeze({ x: 0, y: 0, w: 0, h: 0 });
+
+/** Limites do elemento no seu próprio espaço (forma: o caminho; instância: o conteúdo do símbolo). */
+export function elementLocalBounds(el, doc, offset = 0, mcTime = 0, depth = 0) {
+  if (el.type === 'shape') return pathBounds(el.path);
+  const sym = doc && symbolById(doc, el.symbolId);
+  if (!sym || depth > 20) return EMPTY;
+  return timelineBounds(doc, sym, instanceFrame(sym, el, offset, mcTime, false), depth + 1) || EMPTY;
+}
+
+/** Limites de tudo que uma timeline mostra num quadro, ou null se estiver vazia. */
+export function timelineBounds(doc, tl, frame, depth = 0) {
+  const pts = [];
+  for (const layer of tl.layers) {
+    if (!layer.visible) continue;
+    const lf = layerFrame(layer, frame);
+    if (!lf) continue;
+    for (const it of lf.items) {
+      if (it.el.type === 'instance') {
+        const sym = symbolById(doc, it.el.symbolId);
+        if (!sym) continue;
+        const b = timelineBounds(doc, sym, instanceFrame(sym, it.el, lf.offset, it.mcTime, false), depth + 1);
+        if (b && depth < 20) pts.push(...localBoxCorners(it.el.matrix, b));
+      } else {
+        pts.push(...localBoxCorners(it.el.matrix, pathBounds(it.el.path)));
+      }
+    }
+  }
+  return pts.length ? pointsBounds(pts) : null;
+}
+
+/** Caixa alinhada aos eixos do elemento no espaço da timeline. */
+export function elementWorldBounds(el, doc, offset = 0, mcTime = 0) {
+  return pointsBounds(localBoxCorners(el.matrix, elementLocalBounds(el, doc, offset, mcTime)));
 }
 
 export function unionBounds(list) {

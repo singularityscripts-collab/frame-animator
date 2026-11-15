@@ -16,7 +16,7 @@
 
       <main id="stage-area">
         <div id="stage-bar">
-          <span id="scene-name" class="crumb">Cena 1</span>
+          <nav id="crumbs" class="crumbs" aria-label="Timeline aberta"></nav>
           <span class="spacer"></span>
           <button id="zoom-fit" class="btn-flat" title="Ajustar à janela (Ctrl+0)">Ajustar</button>
           <button id="zoom-100" class="btn-flat" title="100% (Ctrl+1)">100%</button>
@@ -27,7 +27,16 @@
         </div>
       </main>
 
-      <aside id="props" aria-label="Propriedades"></aside>
+      <aside id="props" aria-label="Painéis">
+        <div class="tabs" role="tablist">
+          <button class="tab active" role="tab" data-tab="props">Propriedades</button>
+          <button class="tab" role="tab" data-tab="library" title="Biblioteca (Ctrl+L)">Biblioteca</button>
+          <button class="tab" role="tab" data-tab="history">Histórico</button>
+        </div>
+        <div id="props-page" class="tab-page" role="tabpanel"></div>
+        <div id="library-page" class="tab-page" role="tabpanel" hidden></div>
+        <div id="history-page" class="tab-page" role="tabpanel" hidden></div>
+      </aside>
 
       <section id="timeline" aria-label="Linha do tempo">
         <div id="tl-resizer" title="Arraste para redimensionar"></div>

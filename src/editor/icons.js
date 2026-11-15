@@ -33,4 +33,13 @@ export const icons = {
   addLayer: svg('<path d="M12 3 2 8l10 5 10-5z"/><path d="M2 13l6 3"/><path d="M18 14v7M14.5 17.5h7"/>'),
   trash: svg('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>'),
   outline: svg('<rect x="5" y="5" width="14" height="14" rx="2"/>'),
+
+  graphic: svg('<circle cx="9" cy="9" r="5"/><rect x="11" y="11" width="9" height="9" rx="1"/>'),
+  movieclip: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M7 5v4M12 5v4M17 5v4"/>'),
+  folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
+  newSymbol: svg('<circle cx="9" cy="10" r="5"/><path d="M17 13v8M13 17h8"/>'),
+  newFolder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v3"/><path d="M3 7v10a2 2 0 0 1 2 2h7"/><path d="M18 14v7M14.5 17.5h7"/>'),
+  gear: svg('<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>'),
+  scene: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 15l5-4 4 3 3-2 6 4"/>'),
+  exportIcon: svg('<path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/>'),
 };

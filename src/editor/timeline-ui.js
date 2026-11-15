@@ -1,6 +1,7 @@
 // Interface da linha do tempo: barra de controle, lista de camadas e grade de quadros (canvas).
 
 import { icons } from './icons.js';
+import { showContextMenu } from './ui-kit.js';
 
 const CW = 12; // largura da célula de quadro
 const RH = 24; // altura da linha (igual a --row-h)
@@ -18,6 +19,10 @@ const C = {
   spanEdge: '#17171b',
   cellLine: 'rgba(0,0,0,0.18)',
   dot: '#dcdce4',
+  tween: '#5a4a8c',
+  tweenActive: '#6a5aa8',
+  tweenArrow: '#e4dcff',
+  tweenBroken: '#b8acd8',
   playhead: '#ff4d5e',
   selected: '#4f9dff',
 };
@@ -300,6 +305,30 @@ export class TimelineUI {
       fc.addEventListener('pointermove', move);
       fc.addEventListener('pointerup', up);
     });
+    fc.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const ed = this.editor;
+      ed.stop();
+      const { frame, row } = pick(e);
+      const layer = ed.layers[row];
+      if (!layer) return;
+      ed.setActiveLayer(layer.id);
+      ed.setFrame(frame);
+      const span = ed.currentSpan();
+      const run = (id) => () => this.actions.run(id);
+      showContextMenu(e.clientX, e.clientY, [
+        span?.tween
+          ? { label: 'Remover tween', run: run('removeTween') }
+          : { label: 'Criar tween clássico', run: run('createClassicTween'), disabled: !span },
+        '-',
+        { label: 'Inserir quadro', hint: 'F5', run: run('insertFrame') },
+        { label: 'Remover quadro', hint: 'Shift+F5', run: run('removeFrame'), disabled: !span },
+        '-',
+        { label: 'Inserir keyframe', hint: 'F6', run: run('insertKeyframe') },
+        { label: 'Inserir keyframe vazio', hint: 'F7', run: run('insertBlankKeyframe') },
+        { label: 'Limpar keyframe', hint: 'Shift+F6', run: run('clearKeyframe'), disabled: span?.start !== frame },
+      ]);
+    });
     fc.addEventListener('wheel', (e) => {
       if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
         e.preventDefault();
@@ -412,13 +441,37 @@ export class TimelineUI {
         ctx.fillStyle = C.grid;
         ctx.fillRect(x + CW - 1, y, 1, RH);
       }
-      for (const s of layer.frames) {
-        if (s.start + s.duration < f0 || s.start > f1) continue;
+      layer.frames.forEach((s, si) => {
+        if (s.start + s.duration < f0 || s.start > f1) return;
         const full = s.elements.length > 0;
         const x0 = s.start * CW - sx;
         const sw = s.duration * CW;
-        ctx.fillStyle = full ? (active ? C.spanFullActive : C.spanFull) : active ? C.spanEmptyActive : C.spanEmpty;
+        if (s.tween) ctx.fillStyle = active ? C.tweenActive : C.tween;
+        else ctx.fillStyle = full ? (active ? C.spanFullActive : C.spanFull) : active ? C.spanEmptyActive : C.spanEmpty;
         ctx.fillRect(x0, y + 1, sw, RH - 2);
+        if (s.tween && s.duration > 1) {
+          // seta do tween; tracejada quando não há keyframe de destino
+          const ok = !!layer.frames[si + 1];
+          const ay = y + RH / 2 + 4;
+          const ax0 = x0 + CW, ax1 = x0 + sw - 3;
+          ctx.save();
+          ctx.strokeStyle = ok ? C.tweenArrow : C.tweenBroken;
+          ctx.lineWidth = 1;
+          if (!ok) ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(ax0, ay + 0.5);
+          ctx.lineTo(ax1, ay + 0.5);
+          ctx.stroke();
+          if (ok) {
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(ax1 - 4, ay - 3);
+            ctx.lineTo(ax1, ay + 0.5);
+            ctx.lineTo(ax1 - 4, ay + 4);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
         ctx.fillStyle = C.cellLine;
         for (let i = 1; i < s.duration; i++) ctx.fillRect(x0 + i * CW - 1, y + 1, 1, RH - 2);
         ctx.fillStyle = C.spanEdge;
@@ -437,13 +490,13 @@ export class TimelineUI {
           ctx.stroke();
         }
         // fim do trecho
-        if (s.duration > 1) {
+        if (s.duration > 1 && !s.tween) {
           const ex = x0 + sw - CW / 2;
           ctx.strokeStyle = '#c8c8d2';
           ctx.lineWidth = 1;
           ctx.strokeRect(Math.round(ex - 2.5) + 0.5, Math.round(cy - 4) + 0.5, 5, 7);
         }
-      }
+      });
       ctx.fillStyle = C.rowLine;
       ctx.fillRect(0, y + RH - 1, w, 1);
     });

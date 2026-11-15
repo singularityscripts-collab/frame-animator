@@ -1,7 +1,20 @@
 // Palco: vista (zoom/pan), renderização via player, onion skin, sobreposições e hit test.
+// "Mundo" aqui é o espaço da timeline que está sendo editada (cena ou símbolo).
+// Ao editar um símbolo no lugar, a matriz de contexto leva esse espaço para o espaço da cena.
 
-import { renderScene, getSpanAt, invert, applyPoint, getPath2D, IDENTITY } from '../player/render.js';
-import { pathBounds, localBoxCorners, elementWorldBounds, unionBounds, boundsIntersect } from '../model/geometry.js';
+import {
+  renderTimeline,
+  getSpanAt,
+  invert,
+  applyPoint,
+  getPath2D,
+  multiply,
+  IDENTITY,
+  symbolById,
+  layerFrame,
+  instanceFrame,
+} from '../player/render.js';
+import { localBoxCorners, elementLocalBounds, unionBounds, boundsIntersect } from '../model/geometry.js';
 import { createTools } from './tools.js';
 
 const HANDLE_IDS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -9,6 +22,7 @@ const HANDLE_POS = {
   nw: [0, 0], n: [0.5, 0], ne: [1, 0], e: [1, 0.5], se: [1, 1], s: [0.5, 1], sw: [0, 1], w: [0, 0.5],
 };
 const RESIZE_CURSORS = ['ew-resize', 'nwse-resize', 'ns-resize', 'nesw-resize'];
+export const SYMBOL_MIME = 'application/x-frame-animator-symbol';
 
 export const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M18.5 8.5A7.5 7.5 0 1 0 19.5 14" fill="none" stroke="white" stroke-width="4" stroke-linecap="round"/><path d="M18.5 8.5A7.5 7.5 0 1 0 19.5 14" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round"/><path d="M14.5 8.5h5v-5" fill="none" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M14.5 8.5h5v-5" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -34,8 +48,24 @@ export class Stage {
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
     canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
     canvas.addEventListener('lostpointercapture', (e) => this.onPointerUp(e));
+    canvas.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas.addEventListener('dragover', (e) => {
+      if (e.dataTransfer.types.includes(SYMBOL_MIME)) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    });
+    canvas.addEventListener('drop', (e) => {
+      const id = e.dataTransfer.getData(SYMBOL_MIME);
+      if (!id) return;
+      e.preventDefault();
+      const ev = this.makeEvent(e);
+      editor.placeSymbol(id, ev.wx, ev.wy);
+      editor.setTool('select');
+      canvas.focus();
+    });
 
     for (const t of ['doc', 'frame', 'selection', 'options', 'layers', 'style']) editor.on(t, () => this.invalidate());
     editor.on('tool', () => {
@@ -46,6 +76,7 @@ export class Stage {
       this.needsFit = true;
       this.resize();
     });
+    editor.on('context', () => this.invalidate());
   }
 
   // ---------- vista ----------
@@ -78,8 +109,9 @@ export class Stage {
     sx ??= w / 2;
     sy ??= h / 2;
     z = Math.max(0.05, Math.min(32, z));
-    const wp = this.toWorld(sx, sy);
-    this.setView(z, sx - wp.x * z, sy - wp.y * z);
+    const v = this.view;
+    const cx = (sx - v.panX) / v.zoom, cy = (sy - v.panY) / v.zoom; // ponto da cena sob o cursor
+    this.setView(z, sx - cx * z, sy - cy * z);
   }
 
   /** Zoom 100% centralizado no palco. */
@@ -95,13 +127,21 @@ export class Stage {
     this.invalidate();
   }
 
-  toWorld(sx, sy) {
+  /** Matriz da timeline editada → tela (pixels CSS). */
+  screenMatrix() {
     const v = this.view;
-    return { x: (sx - v.panX) / v.zoom, y: (sy - v.panY) / v.zoom };
+    return multiply([v.zoom, 0, 0, v.zoom, v.panX, v.panY], this.editor.contextMatrix);
+  }
+  /** Escala aproximada da timeline editada na tela (para tolerâncias e contornos). */
+  get scale() {
+    const m = this.screenMatrix();
+    return Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
+  }
+  toWorld(sx, sy) {
+    return applyPoint(invert(this.screenMatrix()) || IDENTITY, sx, sy);
   }
   toScreen(wx, wy) {
-    const v = this.view;
-    return { x: wx * v.zoom + v.panX, y: wy * v.zoom + v.panY };
+    return applyPoint(this.screenMatrix(), wx, wy);
   }
 
   // ---------- entrada ----------
@@ -144,6 +184,15 @@ export class Stage {
     if (this.canvas.hasPointerCapture?.(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
     tool.up?.(this.makeEvent(e));
     this.updateCursor();
+  }
+
+  /** Duplo clique: entra no símbolo clicado; em área vazia, sobe um nível. */
+  onDoubleClick(e) {
+    if (this.editor.tool !== 'select' || this.spaceDown) return;
+    const ev = this.makeEvent(e);
+    const hit = this.hitTest(ev.wx, ev.wy);
+    if (hit?.el.type === 'instance') this.editor.enterSymbol(hit.el.symbolId, hit);
+    else if (!hit && this.editor.editStack.length) this.editor.exitSymbol();
   }
 
   /** Esc durante um arraste: desfaz a edição ao vivo. Retorna true se havia algo para cancelar. */
@@ -190,10 +239,10 @@ export class Stage {
     const items = this.editor.selectedItems();
     if (!items.length) return null;
     if (items.length === 1) {
-      const el = items[0].el;
-      return { F: el.matrix, box: pathBounds(el.path), items };
+      const it = items[0];
+      return { F: it.el.matrix, box: elementLocalBounds(it.el, this.editor.doc, it.offset, it.mcTime), items };
     }
-    return { F: IDENTITY, box: unionBounds(items.map((it) => elementWorldBounds(it.el))), items };
+    return { F: IDENTITY, box: unionBounds(items.map((it) => this.editor.boundsOf(it))), items };
   }
 
   handles(fr) {
@@ -231,31 +280,49 @@ export class Stage {
   // ---------- hit test ----------
   hitTest(wx, wy) {
     const items = this.editor.frameItems();
-    const tol = 4 / this.view.zoom;
+    const tol = 4 / this.scale;
     for (let i = items.length - 1; i >= 0; i--) {
-      if (this.hitElement(items[i].el, wx, wy, tol)) return items[i];
+      const it = items[i];
+      if (this.hitElement(it.el, wx, wy, tol, it.offset, it.mcTime, 0)) return it;
     }
     return null;
   }
 
-  hitElement(el, wx, wy, tol) {
+  hitElement(el, wx, wy, tol, offset = 0, mcTime = 0, depth = 0) {
     const m = el.matrix;
-    const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
-    const b = elementWorldBounds(el);
-    const pad = tol + (el.strokeWidth || 0) * scale;
-    if (wx < b.x - pad || wx > b.x + b.w + pad || wy < b.y - pad || wy > b.y + b.h + pad) return false;
     const inv = invert(m);
     if (!inv) return false;
+    const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
     const p = applyPoint(inv, wx, wy);
+    const localTol = tol / scale;
+    if (el.type === 'instance') {
+      const doc = this.editor.doc;
+      const sym = symbolById(doc, el.symbolId);
+      if (!sym || depth > 20) return false;
+      const f = instanceFrame(sym, el, offset, mcTime, false);
+      for (const layer of sym.layers) {
+        if (!layer.visible) continue;
+        const lf = layerFrame(layer, f);
+        if (!lf) continue;
+        for (let i = lf.items.length - 1; i >= 0; i--) {
+          const c = lf.items[i];
+          if (this.hitElement(c.el, p.x, p.y, localTol, lf.offset, c.mcTime, depth + 1)) return true;
+        }
+      }
+      return false;
+    }
+    const b = elementLocalBounds(el);
+    const pad = localTol + (el.strokeWidth || 0);
+    if (p.x < b.x - pad || p.x > b.x + b.w + pad || p.y < b.y - pad || p.y > b.y + b.h + pad) return false;
     const path = getPath2D(el.path);
     const ctx = this.hitCtx;
     if (el.fill && el.path.closed && ctx.isPointInPath(path, p.x, p.y)) return true;
-    ctx.lineWidth = (el.stroke ? el.strokeWidth : 0) + (2 * tol) / scale;
+    ctx.lineWidth = (el.stroke ? el.strokeWidth : 0) + 2 * localTol;
     return ctx.isPointInStroke(path, p.x, p.y);
   }
 
   itemsInRect(r) {
-    return this.editor.frameItems().filter((it) => boundsIntersect(elementWorldBounds(it.el), r));
+    return this.editor.frameItems().filter((it) => boundsIntersect(this.editor.boundsOf(it), r));
   }
 
   // ---------- renderização ----------
@@ -272,23 +339,37 @@ export class Stage {
     const doc = editor.doc;
     const playing = editor.player.playing;
     const z = view.zoom;
-    const base = [dpr * z, 0, 0, dpr * z, dpr * view.panX, dpr * view.panY];
+    const sceneBase = [dpr * z, 0, 0, dpr * z, dpr * view.panX, dpr * view.panY];
+    const base = multiply(sceneBase, editor.contextMatrix);
+    const stack = editor.editStack;
+    const isolated = stack[0]?.isolated;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#34343b';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    if (!isolated) {
+      ctx.setTransform(...sceneBase);
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.35)';
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = doc.background;
+      ctx.fillRect(0, 0, doc.width, doc.height);
+      ctx.restore();
+      if (stack.length) {
+        // editando no lugar: a cena aparece desbotada atrás, sem a instância aberta
+        ctx.save();
+        ctx.globalAlpha = 0.3;
+        renderTimeline(ctx, doc, editor.scene, stack[0].parentFrame, { skipId: stack[0].instanceId });
+        ctx.restore();
+      }
+    }
+
     ctx.setTransform(...base);
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.35)';
-    ctx.shadowBlur = 18;
-    ctx.fillStyle = doc.background;
-    ctx.fillRect(0, 0, doc.width, doc.height);
-    ctx.restore();
-
     if (editor.onion.enabled && !playing) this.renderOnion(base);
+    renderTimeline(ctx, doc, editor.timeline, editor.frame, { honorOutline: true, outlinePx: dpr });
 
-    renderScene(ctx, editor.scene, editor.frame, { honorOutline: true, hairline: 1 / z });
+    if (stack.length) this.drawRegistration(ctx);
 
     if (!playing) {
       const tool = this.active || this.currentTool();
@@ -300,13 +381,43 @@ export class Stage {
     }
   }
 
+  /** Cruz no ponto de registro do símbolo aberto. */
+  drawRegistration(ctx) {
+    const p = this.toScreen(0, 0);
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.save();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 3;
+    const cross = () => {
+      ctx.beginPath();
+      ctx.moveTo(p.x - 7, p.y);
+      ctx.lineTo(p.x + 7, p.y);
+      ctx.moveTo(p.x, p.y - 7);
+      ctx.lineTo(p.x, p.y + 7);
+      ctx.stroke();
+    };
+    cross();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    cross();
+    ctx.restore();
+  }
+
   renderOnion(base) {
     const { editor, ctx, canvas } = this;
     const o = editor.onion;
-    const scene = editor.scene;
+    const tl = editor.timeline;
+    const doc = editor.doc;
     const filter = (l) => !l.locked;
     // assinatura: quais keyframes aparecem num quadro (evita repetir quadros iguais)
-    const sig = (f) => scene.layers.map((l) => (l.visible && !l.locked ? getSpanAt(l, f)?.start ?? -1 : -2)).join(',');
+    const sig = (f) =>
+      tl.layers
+        .map((l) => {
+          if (!l.visible || l.locked) return -2;
+          const s = getSpanAt(l, f);
+          return s ? (s.tween ? `${s.start}~${f}` : s.start) : -1;
+        })
+        .join(',');
     const seen = new Set([sig(editor.frame)]);
     const list = [];
     for (let k = 1; k <= o.before; k++) {
@@ -339,7 +450,7 @@ export class Stage {
       if (o.outline) {
         ctx.save();
         ctx.globalAlpha = alpha + 0.2;
-        renderScene(ctx, scene, it.f, { layerFilter: filter, outline: it.color, hairline: 1 / this.view.zoom });
+        renderTimeline(ctx, doc, tl, it.f, { layerFilter: filter, outline: it.color, outlinePx: this.dpr });
         ctx.restore();
         continue;
       }
@@ -348,7 +459,7 @@ export class Stage {
       octx.globalAlpha = 1;
       octx.clearRect(0, 0, oc.width, oc.height);
       octx.setTransform(...base);
-      renderScene(octx, scene, it.f, { layerFilter: filter, hairline: 1 / this.view.zoom });
+      renderTimeline(octx, doc, tl, it.f, { layerFilter: filter, outlinePx: this.dpr });
       octx.setTransform(1, 0, 0, 1, 0, 0);
       octx.globalCompositeOperation = 'source-atop';
       octx.globalAlpha = 0.6;
@@ -366,6 +477,7 @@ export class Stage {
   drawSelection(ctx) {
     const fr = this.selectionFrame();
     if (!fr) return;
+    const doc = this.editor.doc;
     const accent = '#4f9dff';
     ctx.save();
     ctx.lineWidth = 1;
@@ -373,8 +485,8 @@ export class Stage {
     if (fr.items.length > 1) {
       ctx.globalAlpha = 0.6;
       for (const it of fr.items) {
-        const pts = localBoxCorners(it.el.matrix, pathBounds(it.el.path)).map((p) => this.toScreen(p.x, p.y));
-        strokePoly(ctx, pts);
+        const b = elementLocalBounds(it.el, doc, it.offset, it.mcTime);
+        strokePoly(ctx, localBoxCorners(it.el.matrix, b).map((p) => this.toScreen(p.x, p.y)));
       }
       ctx.globalAlpha = 1;
     }
@@ -386,8 +498,12 @@ export class Stage {
       ctx.fillRect(Math.round(h.x) - 3.5, Math.round(h.y) - 3.5, 7, 7);
       ctx.strokeRect(Math.round(h.x) - 3.5, Math.round(h.y) - 3.5, 7, 7);
     }
-    // ponto de transformação (centro)
-    const c = applyPoint(fr.F, fr.box.x + fr.box.w / 2, fr.box.y + fr.box.h / 2);
+    // ponto de transformação: centro da forma; numa instância, o ponto de registro do símbolo
+    const single = fr.items.length === 1 ? fr.items[0].el : null;
+    const c =
+      single?.type === 'instance'
+        ? { x: single.matrix[4], y: single.matrix[5] }
+        : applyPoint(fr.F, fr.box.x + fr.box.w / 2, fr.box.y + fr.box.h / 2);
     const sc = this.toScreen(c.x, c.y);
     ctx.beginPath();
     ctx.arc(sc.x, sc.y, 3.5, 0, Math.PI * 2);

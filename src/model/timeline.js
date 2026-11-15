@@ -4,6 +4,7 @@
 // (frame = quadro para onde a agulha deve ir), ou null se nada mudou.
 
 import { clone, cloneElementsWithNewIds } from './document.js';
+import { tweenElements } from '../player/tween.js';
 
 export function normalize(frames) {
   let start = 0;
@@ -35,20 +36,24 @@ export function insertFrames(frames, frame, count = 1) {
   return { frames: normalize(fr), frame };
 }
 
-function splitAt(fr, frame, elementsFor) {
+function splitAt(fr, frame, elementsFor, keepTween = false) {
   const len = lengthOf(fr);
   if (frame >= len) {
     const last = fr[fr.length - 1];
     last.duration += frame - len;
-    fr.push({ start: frame, duration: 1, elements: elementsFor(last) });
+    fr.push({ start: frame, duration: 1, elements: elementsFor(last, frame - last.start, null) });
     return true;
   }
   const i = indexAt(fr, frame);
   const s = fr[i];
   if (s.start === frame) return false;
   const end = s.start + s.duration;
+  const next = s.tween ? fr[i + 1] || null : null;
+  const elements = elementsFor(s, frame - s.start, next); // calcula antes de encurtar o trecho
   s.duration = frame - s.start;
-  fr.splice(i + 1, 0, { start: frame, duration: end - frame, elements: elementsFor(s) });
+  const span = { start: frame, duration: end - frame, elements };
+  if (keepTween && s.tween) span.tween = clone(s.tween);
+  fr.splice(i + 1, 0, span);
   return true;
 }
 
@@ -56,29 +61,36 @@ function splitAt(fr, frame, elementsFor) {
  * Insere keyframe no quadro. Se já houver keyframe ali, tenta o quadro seguinte
  * (como no Animate: apertar F6 repetidas vezes vai avançando).
  */
-function insertKeyframeLike(frames, frame, elementsFor) {
+function insertKeyframeLike(frames, frame, elementsFor, keepTween) {
   const fr = clone(frames);
   const i = indexAt(fr, frame);
   if (i >= 0 && fr[i].start === frame) {
     const next = frame + 1;
     const j = indexAt(fr, next);
     if (j >= 0 && fr[j].start === next) return null; // próximo já é keyframe
-    const src = fr[i];
-    const ok = splitAt(fr, next, () => elementsFor(src));
+    const ok = splitAt(fr, next, elementsFor, keepTween);
     return ok ? { frames: normalize(fr), frame: next } : null;
   }
-  splitAt(fr, frame, elementsFor);
+  splitAt(fr, frame, elementsFor, keepTween);
   return { frames: normalize(fr), frame };
 }
 
-/** F6: keyframe com cópia do conteúdo anterior. */
+/**
+ * F6: keyframe com cópia do conteúdo anterior. Dentro de um tween, copia a pose interpolada
+ * naquele quadro e o tween continua dos dois lados.
+ */
 export function insertKeyframe(frames, frame) {
-  return insertKeyframeLike(frames, frame, (src) => cloneElementsWithNewIds(src.elements));
+  return insertKeyframeLike(
+    frames,
+    frame,
+    (src, offset, next) => cloneElementsWithNewIds(next && offset > 0 ? tweenElements(src, next, offset) : src.elements),
+    true,
+  );
 }
 
 /** F7: keyframe vazio. */
 export function insertBlankKeyframe(frames, frame) {
-  return insertKeyframeLike(frames, frame, () => []);
+  return insertKeyframeLike(frames, frame, () => [], false);
 }
 
 /** Shift+F5: remove um quadro. A camada sempre mantém pelo menos um quadro. */

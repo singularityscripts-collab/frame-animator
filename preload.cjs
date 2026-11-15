@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('api', {
   setTitle: (t) => ipcRenderer.send('app:set-title', t),
   openPreview: (data) => ipcRenderer.send('preview:open', data),
   getPreviewData: () => ipcRenderer.invoke('preview:get-data'),
+  exportBegin: (opts) => ipcRenderer.invoke('export:begin', opts),
+  exportFrame: (id, data) => ipcRenderer.invoke('export:frame', id, data),
+  exportEnd: (id) => ipcRenderer.invoke('export:end', id),
+  exportCancel: (id) => ipcRenderer.invoke('export:cancel', id),
+  showInFolder: (p) => ipcRenderer.send('shell:show', p),
   onMenuAction: (fn) => ipcRenderer.on('menu:action', (_e, id) => fn(id)),
   onCloseRequested: (fn) => ipcRenderer.on('app:close-requested', () => fn()),
 });
