@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <title>Testar cena</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #111114;
+        color: #9a9aa6;
+        font: 12px 'Segoe UI', system-ui, sans-serif;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: calc(100% - 28px);
+      }
+      footer {
+        height: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="player"></canvas>
+    <footer id="info">Carregando…</footer>
+    <script type="module" src="preview.js"></script>
+  </body>
+</html>

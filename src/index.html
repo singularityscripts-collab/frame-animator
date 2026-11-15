@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'"
+    />
+    <title>Frame Animator</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="toolbar" aria-label="Ferramentas"></aside>
+
+      <main id="stage-area">
+        <div id="stage-bar">
+          <span id="scene-name" class="crumb">Cena 1</span>
+          <span class="spacer"></span>
+          <button id="zoom-fit" class="btn-flat" title="Ajustar à janela (Ctrl+0)">Ajustar</button>
+          <button id="zoom-100" class="btn-flat" title="100% (Ctrl+1)">100%</button>
+          <label class="zoom-field" title="Zoom"><input id="zoom-input" type="text" value="100%" /></label>
+        </div>
+        <div id="stage-wrap">
+          <canvas id="stage"></canvas>
+        </div>
+      </main>
+
+      <aside id="props" aria-label="Propriedades"></aside>
+
+      <section id="timeline" aria-label="Linha do tempo">
+        <div id="tl-resizer" title="Arraste para redimensionar"></div>
+        <div id="tl-toolbar"></div>
+        <div id="tl-head">
+          <div id="tl-corner"></div>
+          <div id="tl-ruler-wrap"><canvas id="tl-ruler"></canvas></div>
+        </div>
+        <div id="tl-scroll">
+          <div id="tl-layers"></div>
+          <div id="tl-frames-wrap"><canvas id="tl-frames"></canvas></div>
+        </div>
+        <div id="tl-foot">
+          <div id="tl-layer-buttons"></div>
+          <div id="tl-hscroll"><div id="tl-hscroll-inner"></div></div>
+        </div>
+      </section>
+    </div>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
