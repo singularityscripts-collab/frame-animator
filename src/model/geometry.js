@@ -1,6 +1,6 @@
 // Geometria do editor: criação de formas, limites (bounds) e suavização do lápis.
 
-import { applyPoint, symbolById, layerFrame, instanceFrame } from '../player/render.js';
+import { applyPoint, symbolById, layerFrame, instanceFrame, subpaths, isGradient } from '../player/render.js';
 import { uid } from './document.js';
 
 const K = 0.5522847498; // constante para aproximar elipse com Bézier
@@ -47,7 +47,7 @@ export function freehandPath(points, tolerance) {
 }
 
 export function makeShape({ path, cx, cy, fill, stroke, strokeWidth }) {
-  return {
+  const el = {
     id: uid('e'),
     type: 'shape',
     matrix: [1, 0, 0, 1, cx, cy],
@@ -56,6 +56,20 @@ export function makeShape({ path, cx, cy, fill, stroke, strokeWidth }) {
     stroke,
     strokeWidth,
   };
+  if (isGradient(el.fill)) el.fill = fitGradient(el.fill, pathBounds(path));
+  return el;
+}
+
+/**
+ * Encaixa um gradiente nos limites locais de uma forma (posição inicial, antes de ajustar
+ * com a ferramenta de gradiente): linear atravessa a largura; radial cobre a caixa.
+ */
+export function fitGradient(grad, b) {
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  const half = Math.max(b.w, b.h, 1) / 2;
+  const g = structuredClone(grad);
+  g.matrix = g.type === 'radial' ? [half, 0, 0, half, cx, cy] : [Math.max(b.w, 1) / 2, 0, 0, Math.max(b.w, 1) / 2, cx, cy];
+  return g;
 }
 
 // ---------- Limites ----------
@@ -71,8 +85,6 @@ function bez(p0, p1, p2, p3, t) {
 export function pathBounds(path) {
   let b = boundsCache.get(path);
   if (b) return b;
-  const pts = path.pts;
-  const n = pts.length;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const add = (x, y) => {
     if (x < minX) minX = x;
@@ -80,17 +92,21 @@ export function pathBounds(path) {
     if (x > maxX) maxX = x;
     if (y > maxY) maxY = y;
   };
-  for (const p of pts) add(p[0], p[1]);
-  const segs = path.closed ? n : n - 1;
-  for (let i = 0; i < segs; i++) {
-    const a = pts[i], c = pts[(i + 1) % n];
-    if (!(a[4] || a[5] || c[2] || c[3])) continue;
-    for (let s = 1; s < 12; s++) {
-      const t = s / 12;
-      add(bez(a[0], a[0] + a[4], c[0] + c[2], c[0], t), bez(a[1], a[1] + a[5], c[1] + c[3], c[1], t));
+  for (const sp of subpaths(path)) {
+    const pts = sp.pts;
+    const n = pts.length;
+    for (const p of pts) add(p[0], p[1]);
+    const segs = sp.closed ? n : n - 1;
+    for (let i = 0; i < segs; i++) {
+      const a = pts[i], c = pts[(i + 1) % n];
+      if (!(a[4] || a[5] || c[2] || c[3])) continue;
+      for (let s = 1; s < 12; s++) {
+        const t = s / 12;
+        add(bez(a[0], a[0] + a[4], c[0] + c[2], c[0], t), bez(a[1], a[1] + a[5], c[1] + c[3], c[1], t));
+      }
     }
   }
-  if (!n) minX = minY = maxX = maxY = 0;
+  if (minX === Infinity) minX = minY = maxX = maxY = 0;
   b = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
   boundsCache.set(path, b);
   return b;

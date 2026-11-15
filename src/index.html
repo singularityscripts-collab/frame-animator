@@ -30,10 +30,12 @@
       <aside id="props" aria-label="Painéis">
         <div class="tabs" role="tablist">
           <button class="tab active" role="tab" data-tab="props">Propriedades</button>
+          <button class="tab" role="tab" data-tab="colors" title="Cores (Ctrl+Shift+F9)">Cores</button>
           <button class="tab" role="tab" data-tab="library" title="Biblioteca (Ctrl+L)">Biblioteca</button>
           <button class="tab" role="tab" data-tab="history">Histórico</button>
         </div>
         <div id="props-page" class="tab-page" role="tabpanel"></div>
+        <div id="colors-page" class="tab-page" role="tabpanel" hidden></div>
         <div id="library-page" class="tab-page" role="tabpanel" hidden></div>
         <div id="history-page" class="tab-page" role="tabpanel" hidden></div>
       </aside>
@@ -56,6 +58,7 @@
       </section>
     </div>
     <div id="toast" role="status" aria-live="polite"></div>
+    <script src="../node_modules/paper/dist/paper-core.min.js"></script>
     <script type="module" src="app.js"></script>
   </body>
 </html>

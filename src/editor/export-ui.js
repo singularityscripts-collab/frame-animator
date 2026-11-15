@@ -2,7 +2,8 @@
 // O player desenha cada quadro aqui; o processo principal grava os PNGs ou passa os quadros para o ffmpeg.
 
 import { openDialog, openProgress } from './ui-kit.js';
-import { renderDocumentFrame, sceneLength } from '../player/render.js';
+import { renderDocumentFrame, sceneLength, movieLength, movieLocate } from '../player/render.js';
+import { movieSchedule, mixdownWav } from '../player/audio.js';
 import { clone } from '../model/document.js';
 
 export const FORMATS = {
@@ -32,7 +33,9 @@ export async function exportDialog(editor) {
   }
   editor.stop();
   const doc = editor.doc;
-  const len = sceneLength(doc.scenes[editor.sceneIndex]);
+  const sceneLen = sceneLength(doc.scenes[editor.sceneIndex]);
+  const many = doc.scenes.length > 1;
+  const len = sceneLen;
   const opts = await openDialog({
     title: 'Exportar animação',
     ok: 'Exportar…',
@@ -41,6 +44,7 @@ export async function exportDialog(editor) {
         <select name="format">${Object.entries(FORMATS)
           .map(([k, f]) => `<option value="${k}">${f.label}</option>`)
           .join('')}</select></label>
+      ${many ? `<label class="dlg-row"><span>Cenas</span><select name="scenes"><option value="current">Só a cena atual (${doc.scenes[editor.sceneIndex].name.replace(/</g, '&lt;')})</option><option value="all">Todas, em sequência (${movieLength(doc)} quadros)</option></select></label>` : ''}
       <label class="dlg-row"><span>Tamanho (%)</span>
         <div class="dlg-row inline"><input type="number" name="scale" value="100" min="10" max="400" step="5" style="width:80px"><span class="dlg-text" data-size></span></div></label>
       <div class="dlg-row"><span>Quadros</span>
@@ -49,7 +53,7 @@ export async function exportDialog(editor) {
         <span><input type="checkbox" name="transparent"> <span class="dlg-text" data-alpha>Transparente</span></span></label>
       <label class="dlg-row" data-gif><span>Repetir GIF</span>
         <select name="gifLoop"><option value="0">Sempre</option><option value="-1">Tocar uma vez</option></select></label>
-      <p class="dlg-text">${doc.fps} fps · ${len} ${len === 1 ? 'quadro' : 'quadros'} na cena. Movie clips tocam no export.</p>`,
+      <p class="dlg-text">${doc.fps} fps · ${len} ${len === 1 ? 'quadro' : 'quadros'} na cena. Movie clips tocam no export${doc.library.sounds.length ? '; o som vai junto em MP4 e MOV' : ''}.</p>`,
     onOpen(form) {
       const update = () => {
         const f = form.format.value;
@@ -59,15 +63,24 @@ export async function exportDialog(editor) {
         if (!FORMATS[f].alpha) form.transparent.checked = false;
         form.querySelector('[data-alpha]').textContent = FORMATS[f].alpha ? 'Transparente' : 'Transparente (não disponível em MP4)';
         form.querySelector('[data-gif]').hidden = f !== 'gif';
+        if (form.scenes) {
+          const total = form.scenes.value === 'all' ? movieLength(doc) : sceneLen;
+          form.to.max = form.from.max = total;
+          if (Number(form.to.value) > total || form.scenes.dataset.last !== form.scenes.value) form.to.value = total;
+          form.scenes.dataset.last = form.scenes.value;
+        }
       };
       form.addEventListener('input', update);
       update();
     },
   });
   if (!opts) return;
-  const from = Math.max(1, Math.min(len, parseInt(opts.from, 10) || 1)) - 1;
-  const to = Math.max(from + 1, Math.min(len, parseInt(opts.to, 10) || len)) - 1;
+  const all = opts.scenes === 'all';
+  const total = all ? movieLength(doc) : sceneLen;
+  const from = Math.max(1, Math.min(total, parseInt(opts.from, 10) || 1)) - 1;
+  const to = Math.max(from + 1, Math.min(total, parseInt(opts.to, 10) || total)) - 1;
   await runExport(editor, {
+    allScenes: all,
     format: opts.format,
     scale: parseFloat(opts.scale) || 100,
     from,
@@ -78,13 +91,33 @@ export async function exportDialog(editor) {
 }
 
 /** Exporta sem perguntar nada (também usado pelo teste automático). opts.path pula o diálogo de salvar. */
-export async function runExport(editor, { format, scale = 100, from = 0, to, transparent = false, gifLoop = 0, path, quiet = false }) {
+export async function runExport(editor, { format, scale = 100, from = 0, to, transparent = false, gifLoop = 0, path, quiet = false, allScenes = false }) {
   const api = window.api;
   const doc = clone(editor.doc); // o documento não muda durante o export
   const scene = editor.sceneIndex;
-  to ??= sceneLength(doc.scenes[scene]) - 1;
+  to ??= (allScenes ? movieLength(doc) : sceneLength(doc.scenes[scene])) - 1;
+  // quadro do export → { cena, quadro }
+  const locate = (f) => (allScenes ? movieLocate(doc, f) : { sceneIndex: scene, frame: f });
   const { w, h } = exportSize(doc, scale, format);
+  // som: mixa a agenda dos quadros exportados (só vídeo leva áudio)
+  let audio = null;
+  if ((format === 'mp4' || format === 'mov') && doc.library.sounds.length) {
+    const segs = [];
+    for (let f = from; f <= to; f++) {
+      const l = locate(f);
+      const last = segs[segs.length - 1];
+      if (last && last.sceneIndex === l.sceneIndex && last.to === l.frame - 1) last.to = l.frame;
+      else segs.push({ sceneIndex: l.sceneIndex, from: l.frame, to: l.frame });
+    }
+    try {
+      audio = await mixdownWav(doc, movieSchedule(doc, segs), (to - from + 1) / doc.fps);
+    } catch (err) {
+      console.warn('Som não mixado', err);
+      editor.toast('O som não pôde ser mixado; o vídeo sai sem áudio.');
+    }
+  }
   const job = await api.exportBegin({
+    audio,
     format,
     width: w,
     height: h,
@@ -107,7 +140,8 @@ export async function runExport(editor, { format, scale = 100, from = 0, to, tra
         editor.toast('Exportação cancelada.');
         return null;
       }
-      renderDocumentFrame(ctx, doc, scene, f, { width: w, height: h, transparent });
+      const loc = locate(f);
+      renderDocumentFrame(ctx, doc, loc.sceneIndex, loc.frame, { width: w, height: h, transparent });
       let data;
       if (format === 'png') {
         const blob = canvas.convertToBlob ? await canvas.convertToBlob({ type: 'image/png' }) : await new Promise((r) => canvas.toBlob(r, 'image/png'));

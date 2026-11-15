@@ -7,6 +7,9 @@ import { SYMBOL_MIME } from './stage.js';
 import { SYMBOL_TYPES } from '../model/document.js';
 import { timelineBounds } from '../model/geometry.js';
 import { renderTimeline } from '../player/render.js';
+import { AudioEngine, decodeSound, computePeaks } from '../player/audio.js';
+
+const preview = new AudioEngine();
 
 const LIB_MIME = 'application/x-frame-animator-lib';
 
@@ -48,6 +51,7 @@ export class LibraryUI {
     };
     mk('newSymbol', 'Novo símbolo (Ctrl+F8)', () => actions.run('newSymbol'));
     mk('newFolder', 'Nova pasta', () => this.newFolder());
+    mk('speaker', 'Importar som…', () => actions.importSound());
     mk('gear', 'Propriedades do símbolo', () => this.selected?.kind === 'items' && this.properties(this.selected.id));
     mk('trash', 'Apagar', () => this.selected && this.remove(this.selected.kind, this.selected.id));
 
@@ -68,6 +72,7 @@ export class LibraryUI {
         showContextMenu(e.clientX, e.clientY, [
           { label: 'Novo símbolo…', hint: 'Ctrl+F8', run: () => actions.run('newSymbol') },
           { label: 'Nova pasta', run: () => this.newFolder() },
+          { label: 'Importar som…', run: () => actions.importSound() },
         ]);
       }
     });
@@ -88,16 +93,20 @@ export class LibraryUI {
     const lib = this.editor.doc.library;
     if (this.selected && !lib[this.selected.kind].some((x) => x.id === this.selected.id)) this.selected = null;
     const usage = this.editor.usage();
-    this.root.querySelector('.lib-count').textContent = `${lib.items.length} ${lib.items.length === 1 ? 'item' : 'itens'}`;
+    for (const [id, n] of this.editor.soundUsage()) usage.set(id, n);
+    const count = lib.items.length + lib.sounds.length;
+    this.root.querySelector('.lib-count').textContent = `${count} ${count === 1 ? 'item' : 'itens'}`;
     this.list.innerHTML = '';
 
-    if (!lib.items.length && !lib.folders.length) {
+    if (!lib.items.length && !lib.folders.length && !lib.sounds.length) {
       this.list.innerHTML = `<div class="lib-empty">A biblioteca está vazia.<br>Selecione algo no palco e aperte <span class="kbd">F8</span> para criar um símbolo.</div>`;
     } else if (this.query) {
       const q = norm(this.query);
       const hits = lib.items.filter((s) => norm(s.name).includes(q)).sort((a, b) => a.name.localeCompare(b.name));
-      if (!hits.length) this.list.innerHTML = `<div class="lib-empty">Nada encontrado.</div>`;
+      const sounds = lib.sounds.filter((s) => norm(s.name).includes(q));
+      if (!hits.length && !sounds.length) this.list.innerHTML = `<div class="lib-empty">Nada encontrado.</div>`;
       for (const s of hits) this.list.appendChild(this.itemRow(s, 0, usage));
+      for (const s of sounds) this.list.appendChild(this.soundRow(s, 0, usage));
     } else {
       this.renderFolder(null, 0, usage);
     }
@@ -113,6 +122,8 @@ export class LibraryUI {
     }
     const items = lib.items.filter((s) => (s.folderId || null) === parentId).sort((a, b) => a.name.localeCompare(b.name));
     for (const s of items) this.list.appendChild(this.itemRow(s, depth, usage));
+    const sounds = lib.sounds.filter((s) => (s.folderId || null) === parentId).sort((a, b) => a.name.localeCompare(b.name));
+    for (const s of sounds) this.list.appendChild(this.soundRow(s, depth, usage));
   }
 
   baseRow(kind, entry, depth) {
@@ -199,6 +210,27 @@ export class LibraryUI {
     return row;
   }
 
+  soundRow(snd, depth, usage) {
+    const row = this.baseRow('sounds', snd, depth);
+    row.title = `${snd.name} · ${snd.duration.toFixed(1)} s · duplo clique para ouvir`;
+    row.innerHTML = `<span class="caret"></span><span class="lib-icon snd">${icons.speaker}</span><span class="lib-name">${esc(snd.name)}</span><span class="lib-uses">${usage.get(snd.id) || 0}</span>`;
+    const play = () => preview.play(this.editor.doc, [{ soundId: snd.id, at: 0, offset: 0, until: snd.duration, volume: 1, pan: 0, fadeIn: 0, fadeOut: 0 }]);
+    row.querySelector('.lib-icon').addEventListener('dblclick', play);
+    row.querySelector('.lib-name').addEventListener('dblclick', () => this.rename(row, 'sounds', snd));
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      this.selected = { kind: 'sounds', id: snd.id };
+      showContextMenu(e.clientX, e.clientY, [
+        { label: 'Ouvir', run: play },
+        { label: 'Parar', run: () => preview.stop() },
+        { label: 'Renomear', run: () => this.rename(row, 'sounds', snd) },
+        '-',
+        { label: 'Apagar', run: () => this.remove('sounds', snd.id) },
+      ]);
+    });
+    return row;
+  }
+
   rename(row, kind, entry) {
     const nameEl = row.querySelector('.lib-name');
     const input = document.createElement('input');
@@ -239,6 +271,11 @@ export class LibraryUI {
 
   async remove(kind, id) {
     const ed = this.editor;
+    if (kind === 'sounds') {
+      const snd = ed.doc.library.sounds.find((x) => x.id === id);
+      const n = ed.soundUsage().get(id) || 0;
+      if (n > 0 && !(await confirmDialog('Apagar som', `"${snd.name}" está em ${n} quadro(s). O som sai deles também. Dá para desfazer com Ctrl+Z.`, 'Apagar'))) return;
+    }
     if (kind === 'items') {
       const s = ed.symbol(id);
       const n = ed.usage().get(id) || 0;
@@ -264,6 +301,7 @@ export class LibraryUI {
     const ctx = c.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, c.width, c.height);
+    if (this.selected?.kind === 'sounds') return this.drawWave(ctx, c, dpr, w, h);
     const sel = this.selected?.kind === 'items' ? this.editor.symbol(this.selected.id) : null;
     this.previewName.textContent = sel ? `${sel.name} · ${SYMBOL_TYPES[sel.type]}` : '';
     if (!sel) return;
@@ -277,3 +315,32 @@ export class LibraryUI {
     renderTimeline(ctx, doc, sel, 0, {});
   }
 }
+
+LibraryUI.prototype.drawWave = function (ctx, c, dpr, w, h) {
+  const snd = this.editor.doc.library.sounds.find((x) => x.id === this.selected.id);
+  this.previewName.textContent = snd ? `${snd.name} · ${snd.duration.toFixed(1)} s` : '';
+  if (!snd) return;
+  const key = snd.id + ':' + snd.data.length;
+  this.waves ||= new Map();
+  const pk = this.waves.get(key);
+  if (!pk) {
+    this.waves.set(key, 'loading');
+    this.waveCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+    decodeSound(this.waveCtx, snd)
+      .then((buf) => {
+        this.waves.set(key, computePeaks(buf, Math.max(20, (w * 2) / Math.max(0.1, buf.duration))));
+        this.drawPreview();
+      })
+      .catch(() => {});
+    return;
+  }
+  if (pk === 'loading') return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#7cc4ff';
+  const n = pk.peaks.length;
+  for (let x = 0; x < w; x++) {
+    const v = pk.peaks[Math.floor((x / w) * n)] || 0;
+    const a = v * (h / 2 - 8);
+    ctx.fillRect(x, h / 2 - a, 1, Math.max(1, a * 2));
+  }
+};

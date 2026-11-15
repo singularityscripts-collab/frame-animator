@@ -13,9 +13,14 @@ import {
   symbolById,
   layerFrame,
   instanceFrame,
+  cameraAt,
+  applyCameraTint,
+  drawElement,
 } from '../player/render.js';
+import { motionPath } from '../player/tween.js';
 import { localBoxCorners, elementLocalBounds, unionBounds, boundsIntersect } from '../model/geometry.js';
 import { createTools } from './tools.js';
+import { renderContentFor } from './tools-paint.js';
 
 const HANDLE_IDS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 const HANDLE_POS = {
@@ -49,6 +54,11 @@ export class Stage {
     canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
     canvas.addEventListener('lostpointercapture', (e) => this.onPointerUp(e));
     canvas.addEventListener('dblclick', (e) => this.onDoubleClick(e));
+    canvas.addEventListener('pointerleave', () => {
+      if (this.active) return;
+      this.lastPointer = null;
+      this.invalidate();
+    });
     canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('dragover', (e) => {
@@ -154,7 +164,18 @@ export class Stage {
     const r = this.canvas.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
     const w = this.toWorld(sx, sy);
-    return { sx, sy, wx: w.x, wy: w.y, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, button: e.button };
+    return {
+      sx,
+      sy,
+      wx: w.x,
+      wy: w.y,
+      shift: e.shiftKey,
+      alt: e.altKey,
+      ctrl: e.ctrlKey || e.metaKey,
+      button: e.button,
+      pressure: e.pressure,
+      pointerType: e.pointerType,
+    };
   }
 
   onPointerDown(e) {
@@ -165,7 +186,11 @@ export class Stage {
     this.canvas.focus();
     this.editor.stop();
     const tool = middle ? this.tools.hand : this.currentTool();
-    this.canvas.setPointerCapture(e.pointerId);
+    try {
+      this.canvas.setPointerCapture(e.pointerId);
+    } catch {
+      // ponteiro que o navegador não deixa capturar (ex.: evento sintético): segue sem captura
+    }
     this.active = tool;
     tool.down?.(this.makeEvent(e));
   }
@@ -173,8 +198,17 @@ export class Stage {
   onPointerMove(e) {
     const ev = this.makeEvent(e);
     this.lastPointer = ev;
-    if (this.active) this.active.move?.(ev);
-    else this.currentTool().hover?.(ev);
+    if (this.active) {
+      // pincel e borracha usam todos os pontos intermediários da caneta/mouse (traço mais suave)
+      if (this.active.coalesced && e.getCoalescedEvents) {
+        const list = e.getCoalescedEvents();
+        if (list.length > 1) {
+          for (const c of list) this.active.move?.(this.makeEvent(c));
+          return;
+        }
+      }
+      this.active.move?.(ev);
+    } else this.currentTool().hover?.(ev);
   }
 
   onPointerUp(e) {
@@ -240,7 +274,7 @@ export class Stage {
     if (!items.length) return null;
     if (items.length === 1) {
       const it = items[0];
-      return { F: it.el.matrix, box: elementLocalBounds(it.el, this.editor.doc, it.offset, it.mcTime), items };
+      return { F: it.wm || it.el.matrix, box: elementLocalBounds(it.el, this.editor.doc, it.offset, it.mcTime), items };
     }
     return { F: IDENTITY, box: unionBounds(items.map((it) => this.editor.boundsOf(it))), items };
   }
@@ -283,7 +317,7 @@ export class Stage {
     const tol = 4 / this.scale;
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
-      if (this.hitElement(it.el, wx, wy, tol, it.offset, it.mcTime, 0)) return it;
+      if (this.hitElement(it.wm ? { ...it.el, matrix: it.wm } : it.el, wx, wy, tol, it.offset, it.mcTime, 0)) return it;
     }
     return null;
   }
@@ -301,8 +335,8 @@ export class Stage {
       if (!sym || depth > 20) return false;
       const f = instanceFrame(sym, el, offset, mcTime, false);
       for (const layer of sym.layers) {
-        if (!layer.visible) continue;
-        const lf = layerFrame(layer, f);
+        if (!layer.visible || layer.type === 'guide' || layer.type === 'folder') continue;
+        const lf = layerFrame(layer, f, sym);
         if (!lf) continue;
         for (let i = lf.items.length - 1; i >= 0; i--) {
           const c = lf.items[i];
@@ -316,9 +350,22 @@ export class Stage {
     if (p.x < b.x - pad || p.x > b.x + b.w + pad || p.y < b.y - pad || p.y > b.y + b.h + pad) return false;
     const path = getPath2D(el.path);
     const ctx = this.hitCtx;
-    if (el.fill && el.path.closed && ctx.isPointInPath(path, p.x, p.y)) return true;
+    if (el.fill && el.path.closed && ctx.isPointInPath(path, p.x, p.y, el.path.fillRule || 'nonzero')) return true;
     ctx.lineWidth = (el.stroke ? el.strokeWidth : 0) + 2 * localTol;
     return ctx.isPointInStroke(path, p.x, p.y);
+  }
+
+  /** O ponto cai dentro do preenchimento da forma (não só no traço)? */
+  pointInFill(it, wx, wy) {
+    const inv = invert(it.wm || it.el.matrix);
+    if (!inv || !it.el.path.closed) return false;
+    const p = applyPoint(inv, wx, wy);
+    return this.hitCtx.isPointInPath(getPath2D(it.el.path), p.x, p.y, it.el.path.fillRule || 'nonzero');
+  }
+
+  /** Conteúdo da timeline num canvas do tamanho do palco, sem seleção nem onion (balde, conta-gotas). */
+  renderContent(opts) {
+    return renderContentFor(this, opts);
   }
 
   itemsInRect(r) {
@@ -365,9 +412,24 @@ export class Stage {
       }
     }
 
-    ctx.setTransform(...base);
-    if (editor.onion.enabled && !playing) this.renderOnion(base);
-    renderTimeline(ctx, doc, editor.timeline, editor.frame, { honorOutline: true, outlinePx: dpr });
+    // na cena, a câmera e o parentesco são aplicados camada a camada pelo próprio renderer
+    const inScene = !stack.length;
+    const contentBase = inScene ? sceneBase : base;
+    ctx.setTransform(...contentBase);
+    if (editor.onion.enabled && !playing) this.renderOnion(contentBase);
+    renderTimeline(ctx, doc, editor.timeline, editor.frame, {
+      honorOutline: true,
+      outlinePx: dpr,
+      showGuides: !playing,
+      // como no editor clássico: a máscara só recorta no palco quando a camada de máscara está travada
+      maskFilter: playing ? null : (m) => m.locked,
+      camera: inScene,
+    });
+    if (!playing && editor.multi.enabled) this.drawMultiFrames(ctx, base);
+    if (inScene) {
+      ctx.setTransform(...sceneBase);
+      applyCameraTint(ctx, doc, cameraAt(doc, editor.scene, editor.frame));
+    }
 
     if (stack.length) this.drawRegistration(ctx);
 
@@ -376,7 +438,11 @@ export class Stage {
       ctx.setTransform(...base);
       tool.drawWorld?.(ctx);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      this.drawSelection(ctx);
+      if (editor.tool !== 'gradient') this.drawSelection(ctx);
+      if (editor.tool === 'select') {
+        this.drawMotionPath(ctx);
+        this.drawShapeHints(ctx);
+      }
       tool.drawScreen?.(ctx);
     }
   }
@@ -486,7 +552,7 @@ export class Stage {
       ctx.globalAlpha = 0.6;
       for (const it of fr.items) {
         const b = elementLocalBounds(it.el, doc, it.offset, it.mcTime);
-        strokePoly(ctx, localBoxCorners(it.el.matrix, b).map((p) => this.toScreen(p.x, p.y)));
+        strokePoly(ctx, localBoxCorners(it.wm || it.el.matrix, b).map((p) => this.toScreen(p.x, p.y)));
       }
       ctx.globalAlpha = 1;
     }
@@ -499,10 +565,10 @@ export class Stage {
       ctx.strokeRect(Math.round(h.x) - 3.5, Math.round(h.y) - 3.5, 7, 7);
     }
     // ponto de transformação: centro da forma; numa instância, o ponto de registro do símbolo
-    const single = fr.items.length === 1 ? fr.items[0].el : null;
+    const single = fr.items.length === 1 ? fr.items[0] : null;
     const c =
-      single?.type === 'instance'
-        ? { x: single.matrix[4], y: single.matrix[5] }
+      single?.el.type === 'instance'
+        ? { x: (single.wm || single.el.matrix)[4], y: (single.wm || single.el.matrix)[5] }
         : applyPoint(fr.F, fr.box.x + fr.box.w / 2, fr.box.y + fr.box.h / 2);
     const sc = this.toScreen(c.x, c.y);
     ctx.beginPath();
@@ -512,6 +578,106 @@ export class Stage {
     ctx.restore();
   }
 }
+
+/** Edição de vários quadros: os outros keyframes do intervalo aparecem inteiros. */
+Stage.prototype.drawMultiFrames = function (ctx, base) {
+  const doc = this.editor.doc;
+  ctx.save();
+  ctx.setTransform(...base);
+  for (const it of this.editor.frameItems()) {
+    if (it.multi) drawElement(ctx, doc, { ...it.el, matrix: it.wm }, {});
+  }
+  ctx.restore();
+};
+
+// ---------- caminho do motion tween ----------
+Stage.prototype.motionPathInfo = function () {
+  const ed = this.editor;
+  const items = ed.frameItems();
+  const it = items.find((x) => x.motion && ed.selection.has(x.el.id)) || items.find((x) => x.motion && x.layer.id === ed.activeLayerId);
+  if (!it || it.span.duration < 2) return null;
+  const tw = it.span.tween;
+  const keyT = new Set([...(tw.props?.x || []), ...(tw.props?.y || [])].map((k) => k.t));
+  const lm = it.lm || IDENTITY;
+  const points = motionPath(it.span).map((p) => {
+    const w = applyPoint(lm, p.x, p.y);
+    return { t: p.t, ...this.toScreen(w.x, w.y), key: keyT.has(p.t) || p.t === 0 };
+  });
+  return { it, points };
+};
+
+Stage.prototype.hitMotionPath = function (sx, sy) {
+  const info = this.motionPathInfo();
+  if (!info) return null;
+  let best = null;
+  for (const p of info.points) {
+    const d = Math.hypot(p.x - sx, p.y - sy);
+    if (d <= (p.key ? 7 : 4) && (!best || d < best.d || (p.key && !best.key))) best = { ...p, d, it: info.it };
+  }
+  return best;
+};
+
+Stage.prototype.drawMotionPath = function (ctx) {
+  const info = this.motionPathInfo();
+  if (!info) return;
+  const cur = this.editor.frame - info.it.span.start;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(79,157,255,0.9)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  info.points.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  ctx.stroke();
+  for (const p of info.points) {
+    ctx.fillStyle = p.t === cur ? '#ff4d5e' : p.key ? '#ffffff' : '#4f9dff';
+    ctx.strokeStyle = '#1d3a66';
+    if (p.key) {
+      ctx.fillRect(p.x - 4, p.y - 4, 8, 8);
+      ctx.strokeRect(p.x - 4, p.y - 4, 8, 8);
+    } else {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.t === cur ? 3.5 : 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+};
+
+// ---------- dicas de forma ----------
+Stage.prototype.shapeHintHandles = function () {
+  const ed = this.editor;
+  const c = ed.shapeHintContext();
+  if (!c || !c.span.tween.hints?.length) return [];
+  const lm = ed.layerMatrixOf(c.layer);
+  return c.span.tween.hints.map((h, i) => {
+    const w = applyPoint(lm, h[c.side].x, h[c.side].y);
+    return { i, side: c.side, span: c.span, layer: c.layer, lm, letter: String.fromCharCode(97 + i), ...this.toScreen(w.x, w.y) };
+  });
+};
+
+Stage.prototype.hitShapeHint = function (sx, sy) {
+  return this.shapeHintHandles().find((h) => Math.hypot(h.x - sx, h.y - sy) <= 9) || null;
+};
+
+Stage.prototype.drawShapeHints = function (ctx) {
+  const hs = this.shapeHintHandles();
+  if (!hs.length) return;
+  ctx.save();
+  ctx.font = 'bold 11px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const h of hs) {
+    ctx.fillStyle = h.side === 'a' ? '#ffd60a' : '#34c759';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#000';
+    ctx.fillText(h.letter, h.x, h.y + 0.5);
+  }
+  ctx.restore();
+};
 
 function strokePoly(ctx, pts) {
   ctx.beginPath();

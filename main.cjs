@@ -157,6 +157,101 @@ function smokeTest() {
       const pngs = (await fs.readdir(dir)).filter((f) => /^teste\d{4}\.png$/.test(f));
       if (pngs.length !== 12) throw new Error(`sequência PNG com ${pngs.length} arquivos`);
       await fs.rm(dir, { recursive: true, force: true });
+
+      // Fase 3: Paper.js carregado no app, gradiente + perfurar, pincel e balde
+      const p3 = await js(`(async () => {
+        const { editor: e, stage } = window.__fa;
+        if (typeof paper === 'undefined') return { erro: 'Paper.js não carregou' };
+        const g = await import('./model/geometry.js');
+        const R = await import('./player/render.js');
+        const V = await import('./model/vector-ops.js');
+        const T = await import('./model/raster.js');
+        e.load((await import('./model/document.js')).createDocument({ width: 200, height: 100 }), null);
+        const grad = { type: 'linear', stops: [{ offset: 0, color: '#ff0000', alpha: 1 }, { offset: 1, color: '#0000ff', alpha: 1 }] };
+        const a = g.makeShape({ path: g.rectPath(100, 80), cx: 60, cy: 50, fill: grad, stroke: null, strokeWidth: 1 });
+        const b = g.makeShape({ path: g.ellipsePath(60, 60), cx: 110, cy: 50, fill: '#00ff00', stroke: null, strokeWidth: 1 });
+        e.addElements([a, b]);
+        e.selectAll();
+        e.combineSelection('punch');
+        const c = new OffscreenCanvas(200, 100);
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        R.renderDocumentFrame(ctx, e.doc, 0, 0, {});
+        const px = (x, y) => [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3);
+        const brush = V.fromPaper(V.cleanOutline(V.strokeOutline([{ x: 0, y: 0, w: 10 }, { x: 50, y: 0, w: 20 }]), 0.1));
+        const ink = new Uint8Array(20 * 20);
+        for (let i = 2; i < 18; i++) ink[2 * 20 + i] = ink[17 * 20 + i] = ink[i * 20 + 2] = ink[i * 20 + 17] = 1;
+        const fill = T.floodFill(ink, 20, 20, 10, 10, 0);
+        return { left: px(15, 50), right: px(75, 50), hole: px(100, 50), brush: !!brush, bucket: fill.status };
+      })()`);
+      if (p3.erro) throw new Error(p3.erro);
+      const [l, r2, hole] = [p3.left, p3.right, p3.hole];
+      if (!(l[0] > 200 && l[2] < 60)) throw new Error(`gradiente: esquerda devia ser vermelha, veio ${l}`);
+      if (!(r2[2] > r2[0])) throw new Error(`gradiente: direita devia puxar para o azul, veio ${r2}`);
+      if (hole.join() !== '255,255,255') throw new Error(`perfurar: o furo devia mostrar o fundo branco, veio ${hole}`);
+      if (!p3.brush || p3.bucket !== 'ok') throw new Error(`pincel/balde: ${JSON.stringify(p3)}`);
+      console.log(`ok: Paper.js no app, gradiente (${l} → ${r2}), perfurar (furo ${hole}), pincel e balde`);
+
+      const gifOut = path.join(app.getPath('temp'), `fa-smoke-grad-${Date.now()}.gif`);
+      const gres = await js(`(async () => (await import('./editor/export-ui.js')).runExport(window.__fa.editor, { format: 'gif', path: ${JSON.stringify(gifOut)}, quiet: true }))()`);
+      if (!gres || gres.frames !== 1) throw new Error('export do gradiente falhou');
+      await fs.unlink(gres.path);
+      console.log('ok: export com gradiente');
+
+      // Fase 4: máscara, câmera, som e várias cenas
+      const p4 = await js(`(async () => {
+        const { editor: e } = window.__fa;
+        const g = await import('./model/geometry.js');
+        const R = await import('./player/render.js');
+        const A = await import('./player/audio.js');
+        e.load((await import('./model/document.js')).createDocument({ width: 200, height: 100, fps: 10 }), null);
+        const sq = (cx, cy, w, h, fill) => g.makeShape({ path: g.rectPath(w, h), cx, cy, fill, stroke: null, strokeWidth: 1 });
+        e.addElements([sq(100, 50, 200, 100, '#ff0000')]);          // conteúdo: tudo vermelho
+        e.addLayer();
+        e.addElements([sq(50, 50, 100, 100, '#000000')]);           // máscara: só a metade esquerda
+        e.setLayerKind(e.layers[0].id, 'mask');
+        const c = new OffscreenCanvas(200, 100);
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        const px = (x, y) => [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3).join();
+        R.renderDocumentFrame(ctx, e.doc, 0, 0, {});
+        const mask = { inside: px(25, 50), outside: px(175, 50) };
+        // câmera com zoom 200 no canto: o quadrado vermelho enche a tela
+        e.setLayerKind(e.layers[0].id, 'normal');
+        e.deleteLayer(e.layers[0].id);
+        e.addCamera();
+        e.setCameraProps({ zoom: 200, x: 50, y: 25 });
+        R.renderDocumentFrame(ctx, e.doc, 0, 0, {});
+        const cam = px(190, 90);
+        // som de 0,5 s e uma segunda cena
+        const oac = new OfflineAudioContext(1, 11025, 22050);
+        const osc = oac.createOscillator(); osc.connect(oac.destination); osc.start(); osc.stop(0.5);
+        const wav = A.encodeWav(await oac.startRendering());
+        let bin = ''; new Uint8Array(wav).forEach((b) => (bin += String.fromCharCode(b)));
+        const snd = e.importSound({ name: 'bip', mime: 'audio/wav', data: btoa(bin), duration: 0.5 });
+        e.setActiveLayer(e.layers[1].id);
+        e.setSpanSound({ id: snd.id, sync: 'event' });
+        e.setFrame(9); e.timelineOp('insertFrame');
+        e.addScene();
+        e.addElements([sq(100, 50, 50, 50, '#00ff00')]);
+        e.setFrame(4); e.timelineOp('insertFrame');
+        e.setScene(0);
+        return { mask, cam, movie: R.movieLength(e.doc) };
+      })()`);
+      if (p4.mask.inside !== '255,0,0' || p4.mask.outside !== '255,255,255') throw new Error(`máscara errada: ${JSON.stringify(p4.mask)}`);
+      if (p4.cam !== '255,0,0') throw new Error(`câmera errada: ${p4.cam}`);
+      if (p4.movie !== 15) throw new Error(`filme com ${p4.movie} quadros`);
+      console.log(`ok: máscara (dentro ${p4.mask.inside}, fora ${p4.mask.outside}) e câmera com zoom`);
+      const mp4 = path.join(app.getPath('temp'), `fa-smoke-som-${Date.now()}.mp4`);
+      const sres = await js(`(async () => (await import('./editor/export-ui.js')).runExport(window.__fa.editor, { format: 'mp4', path: ${JSON.stringify(mp4)}, quiet: true, allScenes: true }))()`);
+      if (!sres || sres.frames !== 15) throw new Error(`export de todas as cenas: ${JSON.stringify(sres)}`);
+      const probe = await new Promise((resolve) => {
+        const pr = spawn(FFMPEG, ['-hide_banner', '-i', sres.path], { windowsHide: true });
+        let err = '';
+        pr.stderr.on('data', (d) => (err += d));
+        pr.on('close', () => resolve(err));
+      });
+      if (!/Audio: aac/.test(probe)) throw new Error('o MP4 saiu sem faixa de áudio');
+      await fs.unlink(sres.path);
+      console.log('ok: export de todas as cenas (15 quadros) com áudio AAC no MP4');
       console.log('SMOKE OK');
     } catch (err) {
       fail(err.message);
@@ -187,7 +282,9 @@ function buildMenu() {
         item('Salvar', 'save', 'CmdOrCtrl+S'),
         item('Salvar como…', 'saveAs', 'CmdOrCtrl+Shift+S'),
         { type: 'separator' },
-        item('Testar cena', 'testScene', 'CmdOrCtrl+Enter'),
+        item('Importar som…', 'importSound'),
+        { type: 'separator' },
+        item('Testar filme', 'testScene', 'CmdOrCtrl+Enter'),
         item('Exportar animação…', 'exportMedia', 'CmdOrCtrl+Alt+Shift+S'),
         { type: 'separator' },
         { label: 'Sair', role: 'quit' },
@@ -217,13 +314,37 @@ function buildMenu() {
         item('Converter em símbolo…', 'convertToSymbol', 'F8'),
         { type: 'separator' },
         item('Criar tween clássico', 'createClassicTween'),
+        item('Criar motion tween', 'createMotionTween'),
+        item('Criar shape tween', 'createShapeTween'),
         item('Remover tween', 'removeTween'),
+        item('Dica de forma', 'addShapeHint', 'CmdOrCtrl+Shift+H'),
+        item('Editor de movimento…', 'motionEditor'),
+        item('Easing personalizado…', 'customEase'),
+        { type: 'separator' },
+        item('Nova cena', 'newScene'),
+        item('Duplicar cena', 'duplicateScene'),
+        item('Renomear cena…', 'renameScene'),
+        item('Apagar cena', 'deleteScene'),
+        { type: 'separator' },
+        item('Câmera (liga/desliga)', 'toggleCamera'),
       ],
     },
     {
       label: '&Modificar',
       submenu: [
         item('Editar símbolo / voltar à cena', 'editSymbol', 'CmdOrCtrl+E'),
+        { type: 'separator' },
+        item('Distribuir para keyframes', 'distributeToKeyframes', 'CmdOrCtrl+Shift+K'),
+        item('Distribuir para camadas', 'distributeToLayers', 'CmdOrCtrl+Shift+D'),
+        {
+          label: 'Combinar objetos',
+          submenu: [
+            item('Unir', 'combineUnion'),
+            item('Interseção', 'combineIntersect'),
+            item('Perfurar', 'combinePunch'),
+            item('Recortar', 'combineCrop'),
+          ],
+        },
         { type: 'separator' },
         item('Trazer para a frente', 'arrangeFront', 'CmdOrCtrl+Shift+Up'),
         item('Trazer um nível', 'arrangeForward', 'CmdOrCtrl+Up'),
@@ -240,6 +361,9 @@ function buildMenu() {
         item('Ajustar à janela', 'zoomFit', 'CmdOrCtrl+0'),
         { type: 'separator' },
         item('Onion skin', 'toggleOnion', 'Alt+Shift+O'),
+        { type: 'separator' },
+        item('Cores', 'showColors', 'CmdOrCtrl+Shift+F9'),
+        item('Biblioteca', 'showLibrary', 'CmdOrCtrl+L'),
       ],
     },
     {
@@ -264,8 +388,21 @@ function buildMenu() {
         item('Inserir keyframe vazio', 'insertBlankKeyframe', 'F7'),
         item('Limpar keyframe', 'clearKeyframe', 'Shift+F6'),
         { type: 'separator' },
+        item('Recortar quadros', 'cutFrames', 'CmdOrCtrl+Alt+X'),
+        item('Copiar quadros', 'copyFrames', 'CmdOrCtrl+Alt+C'),
+        item('Colar quadros', 'pasteFrames', 'CmdOrCtrl+Alt+V'),
+        item('Colar e substituir quadros', 'pasteFramesOverwrite'),
+        item('Inverter quadros', 'reverseFrames'),
+        item('Editar vários quadros', 'toggleMulti'),
+        { type: 'separator' },
         item('Nova camada', 'newLayer'),
+        item('Nova pasta de camadas', 'newLayerFolder'),
+        item('Guia de movimento', 'addMotionGuide'),
+        item('Propriedades da camada…', 'layerProperties'),
         item('Apagar camada', 'deleteLayer'),
+        { type: 'separator' },
+        item('Cena anterior', 'prevScene', 'Shift+PageUp'),
+        item('Próxima cena', 'nextScene', 'Shift+PageDown'),
       ],
     },
     {
@@ -364,15 +501,18 @@ const EXPORTS = {
 };
 const jobs = new Map();
 
-function ffmpegArgs(o, out) {
-  const input = ['-y', '-hide_banner', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${o.width}x${o.height}`, '-r', String(o.fps), '-i', '-'];
+function ffmpegArgs(o, out, wav) {
+  let input = ['-y', '-hide_banner', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${o.width}x${o.height}`, '-r', String(o.fps), '-i', '-'];
+  // som mixado pelo editor entra como segunda entrada; o vídeo manda na duração
+  const audio = (codec) => (wav ? ['-map', '0:v', '-map', '1:a', '-c:a', ...codec, '-af', 'apad', '-shortest'] : []);
+  if (wav) input = [...input, '-i', wav];
   if (o.format === 'mp4') {
-    return [...input, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-preset', 'medium', '-movflags', '+faststart', out];
+    return [...input, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-preset', 'medium', ...audio(['aac', '-b:a', '192k']), '-movflags', '+faststart', out];
   }
   if (o.format === 'mov') {
     return o.transparent
-      ? [...input, '-c:v', 'prores_ks', '-profile:v', '4444', '-pix_fmt', 'yuva444p10le', out]
-      : [...input, '-c:v', 'prores_ks', '-profile:v', '3', '-pix_fmt', 'yuv422p10le', out];
+      ? [...input, '-c:v', 'prores_ks', '-profile:v', '4444', '-pix_fmt', 'yuva444p10le', ...audio(['pcm_s16le']), out]
+      : [...input, '-c:v', 'prores_ks', '-profile:v', '3', '-pix_fmt', 'yuv422p10le', ...audio(['pcm_s16le']), out];
   }
   // gif: paleta própria gerada a partir da animação inteira
   const palette = `palettegen=stats_mode=full:reserve_transparent=${o.transparent ? 1 : 0}`;
@@ -392,6 +532,7 @@ ipcMain.handle('export:begin', async (_e, o) => {
     gifLoop: o.gifLoop === -1 ? -1 : 0,
     path: typeof o.path === 'string' ? o.path : null,
     defaultName: String(o.defaultName || 'Animação'),
+    audio: (o.format === 'mp4' || o.format === 'mov') && o.audio && o.audio.byteLength > 44 ? Buffer.from(o.audio) : null,
   };
   let out = o.path;
   if (!out) {
@@ -409,7 +550,11 @@ ipcMain.handle('export:begin', async (_e, o) => {
     job.base = out.replace(/\.png$/i, '');
     job.files = [];
   } else {
-    const proc = spawn(FFMPEG, ffmpegArgs(o, out), { windowsHide: true });
+    if (o.audio) {
+      job.wav = path.join(app.getPath('temp'), `fa-audio-${id}.wav`);
+      await fs.writeFile(job.wav, o.audio);
+    }
+    const proc = spawn(FFMPEG, ffmpegArgs(o, out, job.wav), { windowsHide: true });
     job.proc = proc;
     job.exit = new Promise((resolve) => {
       proc.on('error', (err) => {
@@ -447,6 +592,7 @@ ipcMain.handle('export:end', async (_e, id) => {
   if (job.base) return { path: job.files[0] || job.out, frames: job.count };
   job.proc.stdin.end();
   const code = await job.exit;
+  if (job.wav) await fs.unlink(job.wav).catch(() => {});
   if (code !== 0) {
     await fs.unlink(job.out).catch(() => {});
     throw new Error(`ffmpeg falhou (${code}): ${job.stderr.trim().split('\n').pop() || 'sem detalhes'}`);
@@ -465,6 +611,22 @@ ipcMain.handle('export:cancel', async (_e, id) => {
   job.proc.kill();
   await job.exit;
   await fs.unlink(job.out).catch(() => {});
+  if (job.wav) await fs.unlink(job.wav).catch(() => {});
+});
+
+const AUDIO_TYPES = { wav: 'audio/wav', mp3: 'audio/mpeg', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac' };
+ipcMain.handle('file:open-audio', async () => {
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Importar som',
+    filters: [{ name: 'Áudio', extensions: Object.keys(AUDIO_TYPES) }],
+    properties: ['openFile'],
+  });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const p = r.filePaths[0];
+  const stat = await fs.stat(p);
+  if (stat.size > 200 * 1024 * 1024) throw new Error('Arquivo de áudio muito grande (máximo 200 MB).');
+  const ext = path.extname(p).slice(1).toLowerCase();
+  return { name: path.basename(p), mime: AUDIO_TYPES[ext] || 'audio/mpeg', data: (await fs.readFile(p)).toString('base64') };
 });
 
 ipcMain.on('shell:show', (_e, p) => {

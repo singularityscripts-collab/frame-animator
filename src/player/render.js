@@ -2,7 +2,8 @@
 // Usado pelo editor (palco), pela janela de teste e pelo export.
 // Não depende de nada do editor: só recebe o documento (JSON) e um contexto Canvas 2D.
 
-import { colorToCT, tweenElements } from './tween.js';
+import { colorToCT, tweenElements, motionElement, applyEase, lerpHex } from './tween.js';
+import { guideFromElements } from './geom.js';
 
 // ---------- Matrizes 2D no formato do canvas: [a, b, c, d, e, f] ----------
 
@@ -39,8 +40,14 @@ export function rotation(rad) {
 }
 
 // ---------- Caminhos ----------
-// path = { closed: boolean, pts: [[x, y, inX, inY, outX, outY], ...] }
+// path simples:   { closed: boolean, pts: [[x, y, inX, inY, outX, outY], ...] }
+// path composto:  { closed: true, fillRule: 'nonzero'|'evenodd', subs: [path simples, ...] } (furos, várias partes)
 // in/out são as alças Bézier relativas ao ponto (0,0 = canto reto).
+
+/** Lista de subcaminhos simples de um caminho (simples ou composto). */
+export function subpaths(path) {
+  return path.subs || [path];
+}
 
 const path2dCache = new WeakMap();
 
@@ -55,22 +62,73 @@ export function getPath2D(path) {
 
 export function buildPath2D(path) {
   const p = new Path2D();
-  const pts = path.pts;
-  const n = pts.length;
-  if (!n) return p;
-  p.moveTo(pts[0][0], pts[0][1]);
-  const segs = path.closed ? n : n - 1;
-  for (let i = 0; i < segs; i++) {
-    const a = pts[i];
-    const b = pts[(i + 1) % n];
-    if (a[4] || a[5] || b[2] || b[3]) {
-      p.bezierCurveTo(a[0] + a[4], a[1] + a[5], b[0] + b[2], b[1] + b[3], b[0], b[1]);
-    } else {
-      p.lineTo(b[0], b[1]);
+  for (const sp of subpaths(path)) {
+    const pts = sp.pts;
+    const n = pts.length;
+    if (!n) continue;
+    p.moveTo(pts[0][0], pts[0][1]);
+    const segs = sp.closed ? n : n - 1;
+    for (let i = 0; i < segs; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % n];
+      if (a[4] || a[5] || b[2] || b[3]) {
+        p.bezierCurveTo(a[0] + a[4], a[1] + a[5], b[0] + b[2], b[1] + b[3], b[0], b[1]);
+      } else {
+        p.lineTo(b[0], b[1]);
+      }
     }
+    if (sp.closed) p.closePath();
   }
-  if (path.closed) p.closePath();
   return p;
+}
+
+// ---------- Preenchimento: cor sólida (com alfa) ou gradiente ----------
+// fill = '#rrggbb' | '#rrggbbaa' | { type: 'linear'|'radial', stops: [{ offset, color, alpha }], matrix, focal }
+// O gradiente vive num espaço canônico (linear: x de -1 a 1; radial: círculo de raio 1 no centro),
+// e `matrix` leva esse espaço para o espaço local da forma (é o que a ferramenta de gradiente edita).
+
+export function isGradient(fill) {
+  return !!fill && typeof fill === 'object' && (fill.type === 'linear' || fill.type === 'radial');
+}
+
+function stopColor(s) {
+  const a = Math.max(0, Math.min(1, s.alpha ?? 1));
+  const h = String(s.color || '#000000').replace('#', '');
+  const n = parseInt(h.slice(0, 6), 16) || 0;
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+export function makeCanvasGradient(ctx, g) {
+  let grad;
+  if (g.type === 'radial') {
+    const fx = Math.max(-0.98, Math.min(0.98, g.focal || 0));
+    grad = ctx.createRadialGradient(fx, 0, 0, 0, 0, 1);
+  } else {
+    grad = ctx.createLinearGradient(-1, 0, 1, 0);
+  }
+  const stops = [...(g.stops || [])].sort((a, b) => a.offset - b.offset);
+  for (const s of stops) grad.addColorStop(Math.max(0, Math.min(1, s.offset)), stopColor(s));
+  return grad;
+}
+
+/** Preenche o Path2D `p` (em coordenadas locais da forma) com cor ou gradiente. */
+export function fillPath(ctx, fill, p, rule = 'nonzero') {
+  if (!isGradient(fill)) {
+    ctx.fillStyle = fill;
+    ctx.fill(p, rule);
+    return;
+  }
+  const gm = fill.matrix || IDENTITY;
+  const inv = invert(gm);
+  if (!inv) return;
+  // leva o caminho para o espaço do gradiente, preenche lá e volta
+  const gp = new Path2D();
+  gp.addPath(p, new DOMMatrix(inv));
+  ctx.save();
+  ctx.transform(...gm);
+  ctx.fillStyle = makeCanvasGradient(ctx, fill);
+  ctx.fill(gp, rule);
+  ctx.restore();
 }
 
 // ---------- Documento ----------
@@ -121,25 +179,118 @@ export function tweenTarget(layer, index) {
  * O que a camada mostra num quadro, já com o tween calculado.
  * { span, index, offset, tweened, items: [{ el, index, mcTime }] } ou null.
  */
-export function layerFrame(layer, frame) {
+export function layerFrame(layer, frame, tl = null) {
   const si = spanIndexAt(layer, frame);
   if (si < 0) return null;
   const span = layer.frames[si];
   const offset = frame - span.start;
   let elements = span.elements;
   let tweened = false;
-  const next = tweenTarget(layer, si);
-  if (next && offset > 0) {
-    elements = tweenElements(span, next, offset);
-    tweened = true;
+  let motion = false;
+  if (span.tween?.type === 'motion' && elements.length) {
+    // motion tween: o primeiro elemento segue as propriedades com keys; os outros ficam parados
+    elements = [motionElement(span, offset), ...elements.slice(1)];
+    motion = true;
+  } else {
+    const next = tweenTarget(layer, si);
+    if (next && offset > 0) {
+      elements = tweenElements(span, next, offset, span.tween.type === 'classic' ? guideFor(layer, frame, tl) : null);
+      tweened = true;
+    }
   }
   return {
     span,
     index: si,
     offset,
     tweened,
+    motion,
     items: elements.map((el, i) => ({ el, index: i, mcTime: el.type === 'instance' ? frame - runStart(layer, si, i, el) : 0 })),
   };
+}
+
+/** Caminho do guia de movimento desta camada (se ela for guiada), no quadro. */
+export function guideFor(layer, frame, tl) {
+  if (!layer.guidedBy || !tl) return null;
+  const g = tl.layers.find((l) => l.id === layer.guidedBy);
+  if (!g || g.type !== 'guide') return null;
+  const span = getSpanAt(g, frame);
+  return span ? guideFromElements(span.elements) : null;
+}
+
+// ---------- câmera, profundidade e parentesco ----------
+
+export const DEFAULT_CAMERA = Object.freeze({ zoom: 100, rotation: 0, tint: '#000000', tintAmount: 0 });
+
+export function cameraLayer(tl) {
+  return tl.layers?.find((l) => l.type === 'camera') || null;
+}
+
+/** Estado da câmera no quadro (com tween), ou null se a cena não tem câmera. */
+export function cameraAt(doc, tl, frame) {
+  const cl = cameraLayer(tl);
+  if (!cl) return null;
+  const def = { x: doc.width / 2, y: doc.height / 2, ...DEFAULT_CAMERA };
+  const si = spanIndexAt(cl, frame);
+  const span = si >= 0 ? cl.frames[si] : cl.frames[cl.frames.length - 1];
+  const a = { ...def, ...(span?.camera || {}) };
+  const next = si >= 0 ? cl.frames[si + 1] : null;
+  if (!span?.tween || !next || frame <= span.start) return a;
+  const b = { ...def, ...(next.camera || {}) };
+  const t = applyEase((frame - span.start) / span.duration, span.tween);
+  const L = (k) => a[k] + (b[k] - a[k]) * t;
+  return { x: L('x'), y: L('y'), zoom: L('zoom'), rotation: L('rotation'), tintAmount: L('tintAmount'), tint: lerpHex(a.tint, b.tint, t) };
+}
+
+/** Matriz da câmera para uma camada com profundidade "depth" (0 = no plano da câmera). */
+export function cameraMatrix(doc, cam, depth = 0) {
+  if (!cam) return IDENTITY;
+  const k = 1000 / (1000 + Math.max(-900, depth || 0));
+  const z = (cam.zoom / 100) * k;
+  return multiply(
+    translation(doc.width / 2, doc.height / 2),
+    multiply(rotation((-cam.rotation * Math.PI) / 180), multiply(scaling(z, z), translation(-cam.x, -cam.y))),
+  );
+}
+
+/**
+ * Matriz de cada camada no quadro: câmera (com profundidade) × parentesco.
+ * O conteúdo de uma camada filha fica no espaço do objeto da camada mãe.
+ */
+export function layerMatrices(doc, tl, frame, opts = {}) {
+  const cam = opts.camera === false ? null : cameraAt(doc, tl, frame);
+  const byId = new Map(tl.layers.map((l) => [l.id, l]));
+  const chain = new Map();
+  const parentChain = (layer, seen = new Set()) => {
+    if (chain.has(layer.id)) return chain.get(layer.id);
+    let m = IDENTITY;
+    const parent = layer.parentLayerId && byId.get(layer.parentLayerId);
+    if (parent && !seen.has(parent.id)) {
+      seen.add(layer.id);
+      const lf = layerFrame(parent, frame, tl);
+      const anchor = lf?.items[0]?.el.matrix || IDENTITY;
+      m = multiply(parentChain(parent, seen), anchor);
+    }
+    chain.set(layer.id, m);
+    return m;
+  };
+  const out = new Map();
+  for (const l of tl.layers) {
+    const P = parentChain(l);
+    out.set(l.id, cam ? multiply(cameraMatrix(doc, cam, l.depth || 0), P) : P);
+  }
+  out.camera = cam;
+  return out;
+}
+
+const isIdentity = (m) => m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0;
+
+/** A camada está escondida (ela ou alguma pasta acima dela)? */
+export function isHiddenLayer(tl, layer) {
+  for (let l = layer, guard = 0; l && guard < 64; guard++) {
+    if (!l.visible) return true;
+    l = l.folderId ? tl.layers.find((x) => x.id === l.folderId) : null;
+  }
+  return false;
 }
 
 /** Desde que quadro o mesmo movie clip segue aparecendo nesta posição (para ele continuar tocando). */
@@ -166,13 +317,13 @@ export function instanceFrame(sym, el, offset, mcTime, playMC) {
 // ---------- Desenho ----------
 
 const MAX_DEPTH = 24;
-const scratch = [];
+const scratch = new Map();
 
-function scratchCanvas(depth, w, h) {
-  let c = scratch[depth];
+function scratchCanvas(key, w, h) {
+  let c = scratch.get(key);
   if (!c) {
     c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : document.createElement('canvas');
-    scratch[depth] = c;
+    scratch.set(key, c);
   }
   if (c.width !== w || c.height !== h) {
     c.width = w;
@@ -254,40 +405,48 @@ export function drawElement(ctx, doc, el, env = {}) {
       ctx.restore();
       return;
     }
-    ctx.save();
-    ctx.transform(...el.matrix);
-    if (el.fill && el.path.closed) {
-      ctx.fillStyle = el.fill;
-      ctx.fill(p);
-    }
-    if (el.stroke && el.strokeWidth > 0) {
-      ctx.strokeStyle = el.stroke;
-      ctx.lineWidth = el.strokeWidth;
-      ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
-      ctx.stroke(p);
-    }
-    ctx.restore();
+    const ct = el.color && el.color.mode !== 'none' ? colorToCT(el.color) : null;
+    if (ct) return drawWithColor(ctx, ct, depth, (c) => drawShapeBody(c, el, p));
+    drawShapeBody(ctx, el, p);
     return;
   }
   if (el.type === 'instance') {
-    const sym = symbolById(doc, el.symbolId);
-    if (!sym || depth >= MAX_DEPTH) return;
-    const f = instanceFrame(sym, el, env.offset || 0, env.mcTime || 0, env.playMC);
-    ctx.save();
-    ctx.transform(...el.matrix);
-    const inner = {
-      outline: env.outline,
-      outlinePx: env.outlinePx,
-      playMC: env.playMC,
-      depth: depth + 1,
-      includeHidden: false,
-    };
-    const draw = (c) => renderTimeline(c, doc, sym, f, inner);
-    if (env.outline) draw(ctx);
-    else drawWithColor(ctx, colorToCT(el.color), depth, draw);
-    ctx.restore();
+    drawInstance(ctx, doc, el, env, depth);
   }
+}
+
+function drawShapeBody(ctx, el, p) {
+  ctx.save();
+  ctx.transform(...el.matrix);
+  if (el.fill && el.path.closed) fillPath(ctx, el.fill, p, el.path.fillRule || 'nonzero');
+  if (el.stroke && el.strokeWidth > 0) {
+    ctx.strokeStyle = el.stroke;
+    ctx.lineWidth = el.strokeWidth;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.stroke(p);
+  }
+  ctx.restore();
+}
+
+function drawInstance(ctx, doc, el, env, depth) {
+  const sym = symbolById(doc, el.symbolId);
+  if (!sym || depth >= MAX_DEPTH) return;
+  const f = instanceFrame(sym, el, env.offset || 0, env.mcTime || 0, env.playMC);
+  ctx.save();
+  ctx.transform(...el.matrix);
+  const inner = {
+    outline: env.outline,
+    outlinePx: env.outlinePx,
+    playMC: env.playMC,
+    depth: depth + 1,
+    includeHidden: false,
+    camera: false,
+  };
+  const draw = (c) => renderTimeline(c, doc, sym, f, inner);
+  if (env.outline) draw(ctx);
+  else drawWithColor(ctx, colorToCT(el.color), depth, draw);
+  ctx.restore();
 }
 
 /**
@@ -301,16 +460,22 @@ export function drawElement(ctx, doc, el, env = {}) {
  * opts.playMC: movie clips tocam
  */
 export function renderTimeline(ctx, doc, tl, frame, opts = {}) {
-  for (let i = tl.layers.length - 1; i >= 0; i--) {
-    const layer = tl.layers[i];
-    if (!layer.visible && !opts.includeHidden) continue;
-    if (opts.layerFilter && !opts.layerFilter(layer)) continue;
-    const lf = layerFrame(layer, frame);
-    if (!lf) continue;
+  const lms = layerMatrices(doc, tl, frame, opts);
+  const byId = new Map(tl.layers.map((l) => [l.id, l]));
+  const shown = (l) => opts.includeHidden || !isHiddenLayer(tl, l);
+  const maskOn = (m) => !!m && m.type === 'mask' && shown(m) && (!opts.maskFilter || opts.maskFilter(m));
+
+  const drawLayer = (c, layer) => {
+    if (opts.layerFilter && !opts.layerFilter(layer)) return;
+    const lf = layerFrame(layer, frame, tl);
+    if (!lf) return;
+    const lm = lms.get(layer.id) || IDENTITY;
+    c.save();
+    if (!isIdentity(lm)) c.transform(...lm);
     const outline = opts.outline || (opts.honorOutline && layer.outline ? layer.color : null);
     for (const it of lf.items) {
       if (opts.skipId && it.el.id === opts.skipId) continue;
-      drawElement(ctx, doc, it.el, {
+      drawElement(c, doc, it.el, {
         outline,
         outlinePx: opts.outlinePx,
         offset: lf.offset,
@@ -319,7 +484,73 @@ export function renderTimeline(ctx, doc, tl, frame, opts = {}) {
         depth: opts.depth || 0,
       });
     }
+    c.restore();
+  };
+
+  for (let i = tl.layers.length - 1; i >= 0; i--) {
+    const layer = tl.layers[i];
+    if (layer.type === 'folder' || layer.type === 'camera') continue;
+    if (layer.type === 'guide' && !opts.showGuides) continue;
+    if (!shown(layer)) continue;
+    if (layer.maskedBy && maskOn(byId.get(layer.maskedBy))) continue; // desenhada junto com a máscara
+    if (layer.type === 'mask' && maskOn(layer)) {
+      const masked = tl.layers.filter((l) => l.maskedBy === layer.id && l.type !== 'folder' && shown(l)).reverse();
+      drawMaskGroup(ctx, opts.depth || 0, (c) => masked.forEach((l) => drawLayer(c, l)), (c) => drawLayer(c, layer));
+      continue;
+    }
+    drawLayer(ctx, layer);
   }
+}
+
+/** Desenha o conteúdo recortado pela forma da máscara (alfa do que a máscara desenha). */
+function drawMaskGroup(ctx, depth, drawContent, drawMask) {
+  const w = ctx.canvas.width, h = ctx.canvas.height;
+  const a = scratchCanvas(`ma${depth}`, w, h).getContext('2d');
+  const b = scratchCanvas(`mb${depth}`, w, h).getContext('2d');
+  for (const c of [a, b]) {
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.globalCompositeOperation = 'source-over';
+    c.globalAlpha = 1;
+    c.clearRect(0, 0, w, h);
+    c.setTransform(ctx.getTransform());
+  }
+  drawContent(a);
+  drawMask(b);
+  a.setTransform(1, 0, 0, 1, 0, 0);
+  a.globalCompositeOperation = 'destination-in';
+  a.drawImage(b.canvas, 0, 0);
+  a.globalCompositeOperation = 'source-over';
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(a.canvas, 0, 0);
+  ctx.restore();
+}
+
+/** Tom de cor da câmera por cima de tudo que já foi desenhado na área do palco. */
+export function applyCameraTint(ctx, doc, cam, transparent = false) {
+  if (!cam || !(cam.tintAmount > 0)) return;
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, cam.tintAmount / 100);
+  ctx.globalCompositeOperation = transparent ? 'source-atop' : 'source-over';
+  ctx.fillStyle = cam.tint || '#000000';
+  ctx.fillRect(0, 0, doc.width, doc.height);
+  ctx.restore();
+}
+
+// ---------- filme: várias cenas em sequência ----------
+export function movieLength(doc) {
+  return doc.scenes.reduce((n, s) => n + timelineLength(s), 0);
+}
+
+/** Quadro do filme inteiro → { sceneIndex, frame } */
+export function movieLocate(doc, f) {
+  for (let i = 0; i < doc.scenes.length; i++) {
+    const len = timelineLength(doc.scenes[i]);
+    if (f < len) return { sceneIndex: i, frame: f };
+    f -= len;
+  }
+  const last = doc.scenes.length - 1;
+  return { sceneIndex: last, frame: timelineLength(doc.scenes[last]) - 1 };
 }
 
 /** Desenha um quadro de uma cena inteira (fundo + conteúdo) num canvas do tamanho pedido. Base do export. */
@@ -332,5 +563,7 @@ export function renderDocumentFrame(ctx, doc, sceneIndex, frame, { width, height
     ctx.fillStyle = doc.background;
     ctx.fillRect(0, 0, doc.width, doc.height);
   }
-  renderTimeline(ctx, doc, doc.scenes[sceneIndex], frame, { playMC: true });
+  const scene = doc.scenes[sceneIndex];
+  renderTimeline(ctx, doc, scene, frame, { playMC: true });
+  applyCameraTint(ctx, doc, cameraAt(doc, scene, frame), transparent);
 }

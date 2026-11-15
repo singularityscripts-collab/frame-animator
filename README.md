@@ -11,10 +11,12 @@ npm start
 
 Outros comandos:
 
-- `npm test`: testes do modelo, da timeline e do desfazer (Node, sem janela).
+- `npm test`: testes do modelo, timeline, desfazer, tween, símbolos, booleanos, borracha e balde (Node, sem janela).
 - `npm run smoke`: abre o Electron, salva um arquivo, abre a janela de teste, exporta MP4/MOV/GIF/PNG,
   confere os arquivos com o ffmpeg e fecha sozinho.
 - `npm run serve`: abre o editor no navegador em http://localhost:5178 (sem salvar em disco nem exportar vídeo).
+
+Dependências: Electron, ffmpeg-static (export de vídeo) e Paper.js (geometria).
 
 ## Fase 1 (pronta)
 
@@ -50,6 +52,48 @@ Outros comandos:
 - **Histórico:** aba que lista os passos; clicar num passo volta até ele.
 - Arquivos da Fase 1 abrem normalmente (são atualizados para o formato novo ao abrir).
 
+## Fase 3 (pronta)
+
+- **Pincel (B):** traço com largura variável; com mesa digitalizadora, a pressão da caneta muda a
+  largura. Tamanho, suavizar e pressão ligada/desligada nas propriedades. Vira uma forma preenchida.
+- **Balde de tinta (K):** clicar dentro de uma forma troca o preenchimento; clicar numa área cercada
+  por linhas cria um preenchimento por baixo delas. "Fechar lacunas" (não fechar, pequenas, médias,
+  grandes) deixa passar pequenos buracos no contorno.
+- **Borracha (E):** modos normal, só preenchimentos e só linhas. Corta formas e linhas de verdade
+  (vetorial), não só esconde.
+- **Conta-gotas (I):** copia o preenchimento (e já troca para o balde), o traço, ou a cor do pixel.
+- **Cores** (aba, Ctrl+Shift+F9): preenchimento e traço, cor sólida com alfa, gradiente linear e
+  radial com paradas arrastáveis (cor, posição e alfa), e amostras salvas no arquivo.
+- **Transformar gradiente (F):** mover, esticar, girar, mudar o tamanho e o foco do gradiente na forma.
+- **Combinar objetos** (menu Modificar ou painel com 2+ formas): unir, interseção, perfurar e recortar.
+- Formas agora podem ter furos e várias partes (caminho composto). O tween clássico também
+  interpola gradientes e transparência.
+
+## Fase 4 (pronta)
+
+- **Camadas:** pastas (recolher, arrastar para dentro, travar/ocultar a pasta inteira), máscara
+  (o recorte aparece no palco com a máscara travada, e sempre no teste/export), guia (não sai no
+  export) e guia de movimento (o tween clássico anda sobre o caminho, com opção de orientar),
+  parentesco (a camada filha segue o objeto da mãe) e profundidade (parallax com a câmera).
+  Duplo clique no ícone da camada abre as propriedades; clique direito tem o resto.
+- **Câmera** (botão na timeline ou ferramenta C): mover arrastando, zoom, giro e tom de cor;
+  mudar num quadro cria keyframe, e tween clássico entre keyframes anima a câmera.
+- **Motion tween:** mova o objeto em qualquer quadro e as keys são criadas sozinhas; o caminho
+  aparece no palco e os pontos dele podem ser arrastados. **Editor de movimento** com curvas por
+  propriedade (posição, rotação, inclinação, escala, alfa) e alças Bézier.
+- **Shape tween** entre formas, com **dicas de forma** (Ctrl+Shift+H) para dizer qual ponto vira qual.
+- **Easing:** presets (suave, forte, seno, voltar, elástico, quicar…) e curva personalizada desenhada
+  num gráfico, em todos os tipos de tween. **Presets de movimento** prontos (entrar, cair e quicar,
+  aparecer, girar, pulsar, tremer…) e os seus próprios, salvos a partir de um motion tween.
+- **Quadros:** arrastar seleciona um intervalo em várias camadas; copiar, recortar, colar (inserindo
+  ou substituindo), remover, inverter e converter em keyframes. **Editar vários quadros** ao mesmo tempo.
+- **Rótulos** (nome, comentário, âncora) e **cenas** (menu no nome da cena: criar, duplicar,
+  renomear, reordenar, apagar). O teste e o export tocam todas as cenas em sequência.
+- **Distribuir** para keyframes e para camadas.
+- **Áudio:** importar som (WAV, MP3, OGG, M4A, AAC, FLAC), forma de onda na timeline, sincronia
+  evento/iniciar/parar/stream, scrub ao arrastar a agulha, repetir, volume, pan e fade in/out.
+  O som vai junto no export de MP4 e MOV.
+
 ## Arquitetura
 
 ```
@@ -69,7 +113,14 @@ preload.cjs   ponte segura entre a interface e o sistema
   têm camadas próprias como uma cena. Tudo JSON.
 - **Tween e símbolos no player:** `src/player/tween.js` calcula a interpolação; o editor, a janela
   de teste e o export usam o mesmo cálculo, então o que aparece no palco é o que sai no vídeo.
+- **Câmera, parentesco e máscaras no player:** `renderTimeline` monta a matriz de cada camada
+  (câmera com profundidade × parentesco) e recorta as camadas mascaradas; o editor usa a mesma
+  matriz para selecionar e editar no lugar certo.
+- **Áudio:** `src/player/audio.js` monta a agenda dos sons (função pura); a mesma agenda toca no
+  editor, na janela de teste e vira o WAV que o ffmpeg junta ao vídeo.
 - **Comandos:** toda edição passa por um objeto com `do`/`undo` (`src/editor/commands.js`).
-- **Renderização:** Canvas 2D próprio, sem dependências. O Paper.js entra na Fase 3 só para a
-  geometria pesada (booleanos), sem virar o renderer.
+- **Renderização:** Canvas 2D próprio, sem dependências. O Paper.js (`src/model/vector-ops.js`)
+  só faz a geometria pesada: booleanos, borracha e contorno do pincel. Ele não vai no player.
+- **Balde:** `src/model/raster.js` preenche numa máscara de pixels (com fechamento de lacunas) e
+  devolve os contornos, que viram uma forma vetorial.
 - **Atalhos:** todos num lugar só (`src/editor/actions.js`), usados pelo teclado, menu e botões.

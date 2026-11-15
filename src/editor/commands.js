@@ -38,11 +38,14 @@ export class Compound {
 }
 
 export class AddElements {
-  constructor(layerId, start, elements, label = 'Adicionar') {
-    Object.assign(this, { layerId, start, label, elements: clone(elements) });
+  /** index: onde inserir (padrão: por cima de tudo). 0 = por baixo de tudo. */
+  constructor(layerId, start, elements, label = 'Adicionar', index = null) {
+    Object.assign(this, { layerId, start, label, index, elements: clone(elements) });
   }
   do(ctx) {
-    span(ctx, this.layerId, this.start).elements.push(...clone(this.elements));
+    const list = span(ctx, this.layerId, this.start).elements;
+    if (this.index == null) list.push(...clone(this.elements));
+    else list.splice(Math.min(this.index, list.length), 0, ...clone(this.elements));
   }
   undo(ctx) {
     const s = span(ctx, this.layerId, this.start);
@@ -241,6 +244,93 @@ export class PatchLibraryEntry {
   }
   apply(ctx, props) {
     Object.assign(ctx.doc.library[this.kind].find((x) => x.id === this.id), clone(props));
+  }
+  do(ctx) {
+    this.apply(ctx, this.after);
+  }
+  undo(ctx) {
+    this.apply(ctx, this.before);
+  }
+}
+
+/** Troca a lista inteira de elementos de um keyframe (borracha, booleanos). */
+export class SetSpanElements {
+  constructor(layerId, start, before, after, label = 'Editar') {
+    Object.assign(this, { layerId, start, label, before: clone(before), after: clone(after) });
+  }
+  do(ctx) {
+    span(ctx, this.layerId, this.start).elements = clone(this.after);
+  }
+  undo(ctx) {
+    span(ctx, this.layerId, this.start).elements = clone(this.before);
+  }
+}
+
+/** Troca todas as camadas de uma timeline de uma vez (pastas, máscaras, parentesco, distribuir). */
+export class ReplaceLayers {
+  constructor(tlId, before, after, label = 'Camadas') {
+    Object.assign(this, { tlId, label, before: clone(before), after: clone(after) });
+  }
+  do(ctx) {
+    timeline(ctx, this.tlId).layers = clone(this.after);
+  }
+  undo(ctx) {
+    timeline(ctx, this.tlId).layers = clone(this.before);
+  }
+}
+
+// ---------- cenas ----------
+export class InsertScene {
+  constructor(index, scene, label = 'Nova cena') {
+    Object.assign(this, { index, label, scene: clone(scene) });
+  }
+  do(ctx) {
+    ctx.doc.scenes.splice(this.index, 0, clone(this.scene));
+    ctx.sceneIndex = this.index;
+  }
+  undo(ctx) {
+    ctx.doc.scenes.splice(this.index, 1);
+    ctx.sceneIndex = Math.min(ctx.sceneIndex, ctx.doc.scenes.length - 1);
+  }
+}
+
+export class DeleteScene {
+  constructor(index, scene, label = 'Apagar cena') {
+    Object.assign(this, { index, label, scene: clone(scene) });
+  }
+  do(ctx) {
+    ctx.doc.scenes.splice(this.index, 1);
+    ctx.sceneIndex = Math.min(ctx.sceneIndex, ctx.doc.scenes.length - 1);
+  }
+  undo(ctx) {
+    ctx.doc.scenes.splice(this.index, 0, clone(this.scene));
+    ctx.sceneIndex = this.index;
+  }
+}
+
+export class MoveScene {
+  constructor(from, to, label = 'Mover cena') {
+    Object.assign(this, { from, to, label });
+  }
+  move(ctx, a, b) {
+    const [s] = ctx.doc.scenes.splice(a, 1);
+    ctx.doc.scenes.splice(b, 0, s);
+    ctx.sceneIndex = b;
+  }
+  do(ctx) {
+    this.move(ctx, this.from, this.to);
+  }
+  undo(ctx) {
+    this.move(ctx, this.to, this.from);
+  }
+}
+
+export class PatchScene {
+  constructor(id, before, after, label = 'Cena') {
+    Object.assign(this, { id, label, before: clone(before), after: clone(after) });
+  }
+  apply(ctx, v) {
+    Object.assign(ctx.doc.scenes.find((s) => s.id === this.id), clone(v));
   }
   do(ctx) {
     this.apply(ctx, this.after);

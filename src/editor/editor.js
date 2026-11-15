@@ -14,7 +14,9 @@ import {
   allTimelines,
 } from '../model/document.js';
 import * as TL from '../model/timeline.js';
-import { elementWorldBounds, unionBounds } from '../model/geometry.js';
+import { elementLocalBounds, localBoxCorners, pointsBounds, unionBounds, pathBounds, fitGradient } from '../model/geometry.js';
+import { matrixToProps, motionPropsAt, setKey } from '../player/tween.js';
+import * as V from '../model/vector-ops.js';
 import {
   getSpanAt,
   timelineLength,
@@ -26,12 +28,35 @@ import {
   scaling,
   rotation,
   IDENTITY,
+  isGradient,
+  invert,
+  layerMatrices,
+  cameraAt,
+  cameraMatrix,
 } from '../player/render.js';
 import { Player } from '../player/player.js';
 import { History } from './history.js';
 import * as C from './commands.js';
 
 export const DEFAULT_TWEEN = { type: 'classic', ease: 0, rotate: 'auto', rotations: 0 };
+
+export const DEFAULT_SWATCHES = [
+  '#000000', '#333333', '#666666', '#999999', '#cccccc', '#ffffff',
+  '#ff3b30', '#ff9500', '#ffcc00', '#34c759', '#00c7be', '#007aff',
+  '#5856d6', '#af52de', '#ff2d55', '#a2845e', '#4f9dff', '#1d1d21',
+  { type: 'linear', stops: [{ offset: 0, color: '#ffffff', alpha: 1 }, { offset: 1, color: '#000000', alpha: 1 }] },
+  { type: 'radial', stops: [{ offset: 0, color: '#ffffff', alpha: 1 }, { offset: 1, color: '#000000', alpha: 1 }] },
+  { type: 'linear', stops: [{ offset: 0, color: '#ff3b30', alpha: 1 }, { offset: 0.5, color: '#ffcc00', alpha: 1 }, { offset: 1, color: '#34c759', alpha: 1 }] },
+  { type: 'radial', stops: [{ offset: 0, color: '#ffffff', alpha: 1 }, { offset: 1, color: '#007aff', alpha: 0 }] },
+];
+
+/** Aplica um preenchimento a uma forma. Gradiente novo encaixa na forma; trocar só as cores mantém a posição. */
+export function applyFill(el, fill) {
+  if (!el.path.closed || !fill) return null;
+  if (!isGradient(fill)) return fill;
+  if (isGradient(el.fill) && el.fill.type === fill.type) return { ...structuredClone(fill), matrix: el.fill.matrix, focal: el.fill.focal };
+  return fitGradient(fill, pathBounds(el.path));
+}
 
 export class Editor {
   constructor() {
@@ -41,6 +66,14 @@ export class Editor {
     this.style = { fill: '#4f9dff', stroke: '#1d1d21', strokeWidth: 2, fillOn: true, strokeOn: true };
     this.onion = { enabled: false, before: 2, after: 2, outline: false, beforeColor: '#3b82f6', afterColor: '#22c55e' };
     this.loop = true;
+    this.toolOptions = {
+      brush: { size: 14, pressure: true, smoothing: 40 },
+      eraser: { size: 24, mode: 'normal' },
+      bucket: { gap: 'small' },
+    };
+    this.multi = { enabled: false, before: 2, after: 2 };
+    this.frameSel = null; // intervalo selecionado na timeline: { from, to, layerIds }
+    this.frameClipboard = null;
     this.clipboard = null;
     this.pasteCount = 0;
     this.player = new Player({
@@ -52,6 +85,7 @@ export class Editor {
         this.emit('frame');
       },
       onStop: () => this.emit('playing'),
+      onLoop: () => this.emit('loop'),
     });
     this.load(createDocument(), null);
   }
@@ -76,8 +110,9 @@ export class Editor {
     this.sceneIndex = 0;
     this.editStack = [];
     this.frame = 0;
-    this.activeLayerId = this.scene.layers[0].id;
+    this.activeLayerId = (this.scene.layers.find((l) => l.type !== 'camera' && l.type !== 'folder') || this.scene.layers[0]).id;
     this.selection = new Set();
+    this.frameSel = null;
     this.history.clear();
     this.filePath = filePath;
     this.emit('load');
@@ -97,9 +132,31 @@ export class Editor {
   get editingSymbol() {
     return this.editStack.length ? this.timeline : null;
   }
-  /** Matriz do espaço da timeline editada para o espaço da cena (edição no lugar). */
+  /**
+   * Matriz do espaço da timeline editada para a tela da cena: na cena, a câmera (se houver);
+   * dentro de um símbolo editado no lugar, a transformação da instância.
+   */
   get contextMatrix() {
-    return this.editStack[this.editStack.length - 1]?.matrix || IDENTITY;
+    const top = this.editStack[this.editStack.length - 1];
+    if (top) return top.matrix;
+    return this.sceneCameraMatrix();
+  }
+  sceneCameraMatrix(frame = this.frame) {
+    const cam = cameraAt(this.doc, this.scene, frame);
+    return cam ? cameraMatrix(this.doc, cam, 0) : IDENTITY;
+  }
+  /** Matriz de cada camada da timeline editada, relativa à câmera base (parentesco e profundidade). */
+  layerMatrixMap() {
+    const inScene = !this.editStack.length;
+    const lms = layerMatrices(this.doc, this.timeline, this.frame, { camera: inScene });
+    const c0 = inScene && lms.camera ? cameraMatrix(this.doc, lms.camera, 0) : IDENTITY;
+    const c0inv = invert(c0) || IDENTITY;
+    const out = new Map();
+    for (const [id, m] of lms) out.set(id, multiply(c0inv, m));
+    return out;
+  }
+  layerMatrixOf(layer) {
+    return this.layerMatrixMap().get(layer.id) || IDENTITY;
   }
   get layers() {
     return this.timeline.layers;
@@ -127,7 +184,12 @@ export class Editor {
     return getSpanAt(layer, frame);
   }
   isEditable(layer) {
-    return layer.visible && !layer.locked;
+    if (layer.type === 'folder' || layer.type === 'camera') return false;
+    for (let l = layer, guard = 0; l && guard < 64; guard++) {
+      if (!l.visible || l.locked) return false;
+      l = l.folderId ? this.layer(l.folderId) : null;
+    }
+    return true;
   }
   symbol(id) {
     return symbolById(this.doc, id);
@@ -171,8 +233,10 @@ export class Editor {
   }
   afterChange() {
     this.validateStack();
+    if (this.sceneIndex >= this.doc.scenes.length) this.sceneIndex = this.doc.scenes.length - 1;
     if (!this.layer(this.activeLayerId)) this.activeLayerId = this.layers[0].id;
     this.pruneSelection();
+    this.emit('scenes');
     this.emit('doc');
     this.emit('frame');
     this.emit('selection');
@@ -225,14 +289,14 @@ export class Editor {
     this.tool = t;
     this.emit('tool');
   }
-  setStyle(patch) {
+  setStyle(patch, { applyToSelection = true } = {}) {
     Object.assign(this.style, patch);
     this.emit('style');
-    if (this.selectedItems().some((it) => it.el.type === 'shape')) {
+    if (applyToSelection && this.selectedItems().some((it) => it.el.type === 'shape')) {
       const s = this.style;
       this.updateSelection('Cor e traço', (el) => {
         if (el.type !== 'shape') return;
-        if ('fill' in patch || 'fillOn' in patch) el.fill = el.path.closed && s.fillOn ? s.fill : null;
+        if ('fill' in patch || 'fillOn' in patch) el.fill = s.fillOn ? applyFill(el, s.fill) : null;
         if ('stroke' in patch || 'strokeOn' in patch) el.stroke = s.strokeOn ? s.stroke : null;
         if ('strokeWidth' in patch) {
           el.strokeWidth = s.strokeWidth;
@@ -242,23 +306,109 @@ export class Editor {
     }
   }
 
+  setToolOptions(tool, patch) {
+    Object.assign(this.toolOptions[tool], patch);
+    this.emit('toolOptions');
+  }
+
   // ---------- seleção ----------
   /**
    * Elementos do quadro atual, de baixo para cima, já com tween calculado:
    * [{ layer, span, el, index, offset, mcTime, tweened }]
    */
-  frameItems({ editableOnly = true } = {}) {
+  frameItems({ editableOnly = true, multi = true } = {}) {
     const out = [];
+    const tl = this.timeline;
+    const lms = this.layerMatrixMap();
+    const range = multi && this.multi.enabled ? [this.frame - this.multi.before, this.frame + this.multi.after] : null;
     for (let i = this.layers.length - 1; i >= 0; i--) {
       const layer = this.layers[i];
+      if (layer.type === 'folder' || layer.type === 'camera') continue;
       if (editableOnly && !this.isEditable(layer)) continue;
-      const lf = layerFrame(layer, this.frame);
+      const lm = lms.get(layer.id) || IDENTITY;
+      const lf = layerFrame(layer, this.frame, tl);
+      if (range) {
+        // editar vários quadros: os outros keyframes do intervalo também ficam selecionáveis
+        for (const sp of layer.frames) {
+          if (sp === lf?.span || sp.start < range[0] || sp.start > range[1]) continue;
+          sp.elements.forEach((el, index) =>
+            out.push({ layer, span: sp, el, index, offset: 0, mcTime: 0, tweened: false, multi: true, lm, wm: multiply(lm, el.matrix) }),
+          );
+        }
+      }
       if (!lf) continue;
       for (const it of lf.items) {
-        out.push({ layer, span: lf.span, el: it.el, index: it.index, offset: lf.offset, mcTime: it.mcTime, tweened: lf.tweened });
+        out.push({
+          layer,
+          span: lf.span,
+          el: it.el,
+          index: it.index,
+          offset: lf.offset,
+          mcTime: it.mcTime,
+          tweened: lf.tweened,
+          motion: lf.motion && it.index === 0,
+          lm,
+          wm: multiply(lm, it.el.matrix),
+        });
       }
     }
     return out;
+  }
+
+  /** Aplica uma transformação W (no espaço da tela da timeline) a um elemento que mora numa camada com matriz lm. */
+  applyWorld(it, el, W) {
+    const lm = it.lm || IDENTITY;
+    el.matrix = multiply(invert(lm) || IDENTITY, multiply(W, multiply(lm, el.matrix)));
+  }
+
+  /** Tween de movimento com as propriedades mudadas no quadro t (cria keys só no que mudou). */
+  motionTweenWithMatrix(span, t, m) {
+    const tw = clone(span.tween);
+    tw.props ||= {};
+    const old = motionPropsAt(span, t);
+    const at0 = motionPropsAt(span, 0);
+    const nw = matrixToProps(m);
+    for (const name of ['x', 'y', 'rotation', 'skew', 'scaleX', 'scaleY']) {
+      let v = nw[name];
+      if (name === 'rotation' || name === 'skew') v = old[name] + ((((v - old[name] + 180) % 360) + 360) % 360) - 180;
+      if (Math.abs(v - old[name]) < 1e-6) continue;
+      let keys = tw.props[name] || [];
+      if (!keys.length && t !== 0) keys = [{ t: 0, v: at0[name] }];
+      tw.props[name] = setKey(keys, t, v);
+    }
+    return tw;
+  }
+
+  // ---------- edição ao vivo (arrastar no palco) ----------
+  beginLiveEdit(items = this.selectedItems()) {
+    const els = new Map();
+    const tweens = new Map();
+    for (const it of items) {
+      if (it.motion) tweens.set(`${it.layer.id}:${it.span.start}`, { layerId: it.layer.id, span: it.span, tween: clone(it.span.tween) });
+      else els.set(it.el.id, clone(it.el));
+    }
+    return { els, tweens };
+  }
+  /** Muda a matriz (no espaço da camada) ao vivo; no motion tween, mexe nas keys do quadro. */
+  setLiveMatrix(it, local) {
+    if (it.motion) it.span.tween = this.motionTweenWithMatrix({ ...it.span, tween: it.span.tween }, it.offset, local);
+    else it.el.matrix = local;
+  }
+  endLiveEdit(label, snap) {
+    const now = this.frameItems().filter((it) => !it.motion && snap.els.has(it.el.id));
+    const cmds = this.groupSelected(now).map(
+      (g) => new C.UpdateElements(g.layer.id, g.span.start, g.items.map((it) => snap.els.get(it.el.id)), g.items.map((it) => it.el)),
+    );
+    for (const v of snap.tweens.values()) cmds.push(new C.SetSpanProps(v.layerId, v.span.start, { tween: v.tween }, { tween: v.span.tween }));
+    this.commit(new C.Compound(label, cmds));
+  }
+  cancelLiveEdit(snap) {
+    for (const it of this.frameItems()) {
+      const b = snap.els.get(it.el.id);
+      if (b && !it.motion) Object.assign(it.el, clone(b));
+    }
+    for (const v of snap.tweens.values()) v.span.tween = clone(v.tween);
+    this.emit('selection');
   }
   selectedItems() {
     return this.frameItems().filter((it) => this.selection.has(it.el.id));
@@ -286,7 +436,8 @@ export class Editor {
     this.setSelection([]);
   }
   boundsOf(it) {
-    return elementWorldBounds(it.el, this.doc, it.offset, it.mcTime);
+    const b = elementLocalBounds(it.el, this.doc, it.offset, it.mcTime);
+    return pointsBounds(localBoxCorners(it.wm || it.el.matrix, b));
   }
   selectionBounds() {
     const items = this.selectedItems();
@@ -302,28 +453,172 @@ export class Editor {
   materialize() {
     const items = this.selectedItems().filter((it) => it.tweened);
     if (!items.length) return false;
-    const layers = [...new Set(items.map((it) => it.layer))];
-    const cmds = [];
-    const newIds = [];
-    for (const layer of layers) {
-      const r = TL.insertKeyframe(layer.frames, this.frame);
-      if (!r) continue;
-      cmds.push(new C.SetLayerFrames(layer.id, layer.frames, r.frames, 'Novo keyframe', this.frame, this.frame));
-      const span = r.frames.find((s) => s.start === this.frame);
-      for (const it of items) if (it.layer === layer) newIds.push(span.elements[it.index].id);
-    }
-    if (!cmds.length) return false;
+    const spans = this.keyframeHere([...new Set(items.map((it) => it.layer))]);
+    if (!spans) return false;
+    const newIds = items.map((it) => spans.get(it.layer.id)?.elements[it.index]?.id).filter(Boolean);
     const keep = [...this.selection].filter((id) => !items.some((it) => it.el.id === id));
-    this.history.execute(new C.Compound('Novo keyframe', cmds), this);
     this.selection = new Set([...keep, ...newIds]);
     this.afterChange();
     return true;
+  }
+
+  /**
+   * Cria keyframe no quadro atual nas camadas dadas, quando o quadro está no meio de um tween
+   * (o keyframe recebe a pose interpolada). Devolve Map(layerId → keyframe novo) ou null.
+   */
+  keyframeHere(layers) {
+    const cmds = [];
+    const spans = new Map();
+    for (const layer of layers) {
+      const lf = layerFrame(layer, this.frame, this.timeline);
+      if (!lf?.tweened) continue;
+      const r = TL.insertKeyframe(layer.frames, this.frame);
+      if (!r) continue;
+      cmds.push(new C.SetLayerFrames(layer.id, layer.frames, r.frames, 'Novo keyframe', this.frame, this.frame));
+    }
+    if (!cmds.length) return null;
+    this.history.execute(new C.Compound('Novo keyframe', cmds), this);
+    for (const layer of layers) {
+      const span = this.spanAt(layer);
+      if (span?.start === this.frame) spans.set(layer.id, span);
+    }
+    return spans;
+  }
+
+  /** Aplica mutate(el) a uma lista de itens do quadro (não precisa estar selecionado). */
+  updateItems(items, label, mutate) {
+    this.group(label, () => {
+      if (items.some((it) => it.tweened)) {
+        const ids = items.map((it) => ({ layer: it.layer.id, index: it.index }));
+        this.keyframeHere([...new Set(items.map((it) => it.layer))]);
+        const now = this.frameItems();
+        items = ids.map((k) => now.find((it) => it.layer.id === k.layer && it.index === k.index)).filter(Boolean);
+      }
+      const cmds = this.groupSelected(items.filter((it) => !it.motion)).map((g) => {
+        const before = g.items.map((it) => clone(it.el));
+        const after = before.map((el, k) => {
+          const c = clone(el);
+          mutate(c, g.items[k]);
+          return c;
+        });
+        return new C.UpdateElements(g.layer.id, g.span.start, before, after);
+      });
+      // motion tween: a matriz vira keys no quadro; o resto vai para o elemento base
+      for (const it of items.filter((x) => x.motion)) {
+        const base = it.span.elements[0];
+        const c = clone(it.el);
+        mutate(c, it);
+        cmds.push(new C.SetSpanProps(it.layer.id, it.span.start, { tween: it.span.tween }, { tween: this.motionTweenWithMatrix(it.span, it.offset, c.matrix) }));
+        const { matrix, color, ...rest } = c;
+        const after = { ...clone(base), ...rest, matrix: base.matrix };
+        if (!it.span.tween.props?.alpha?.length) after.color = color;
+        cmds.push(new C.UpdateElements(it.layer.id, it.span.start, [base], [after]));
+      }
+      this.run(new C.Compound(label, cmds));
+    });
+  }
+
+  /** Troca os elementos de keyframes inteiros: changes = Map(layer → elementos novos). */
+  replaceSpans(changes, label) {
+    const cmds = [];
+    for (const [layer, after] of changes) {
+      const span = this.spanAt(layer);
+      if (span) cmds.push(new C.SetSpanElements(layer.id, span.start, span.elements, after, label));
+    }
+    this.run(new C.Compound(label, cmds));
+  }
+
+  // ---------- desenho: borracha, booleanos, balde ----------
+  /**
+   * Apaga a região (item do Paper no espaço da timeline) das formas editáveis do quadro.
+   * mode: 'normal' | 'fills' | 'lines'. Devolve quantas formas mudaram.
+   */
+  eraseRegion(region, mode = 'normal') {
+    const compute = () => {
+      const res = [];
+      for (const it of this.frameItems()) {
+        if (it.el.type !== 'shape' || it.motion || it.multi) continue;
+        const out = V.eraseShape({ ...it.el, matrix: it.wm }, region, mode);
+        const inv = invert(it.lm) || IDENTITY;
+        if (out) res.push({ it, out: out.map((el) => ({ ...el, matrix: multiply(inv, el.matrix) })) });
+      }
+      return res;
+    };
+    let count = 0;
+    this.group('Borracha', () => {
+      let res = compute();
+      if (!res.length) return;
+      if (res.some((r) => r.it.tweened)) {
+        this.keyframeHere([...new Set(res.filter((r) => r.it.tweened).map((r) => r.it.layer))]);
+        res = compute();
+      }
+      const changes = new Map();
+      for (const { it, out } of res) {
+        if (!changes.has(it.layer)) changes.set(it.layer, it.span.elements.map((el) => [el]));
+        changes.get(it.layer)[it.index] = out;
+      }
+      for (const [layer, parts] of changes) changes.set(layer, parts.flat());
+      count = res.length;
+      this.replaceSpans(changes, 'Borracha');
+    });
+    return count;
+  }
+
+  /** Booleanos entre formas selecionadas: 'union' | 'intersect' | 'punch' | 'crop'. */
+  combineSelection(kind) {
+    const labels = { union: 'Unir', intersect: 'Interseção', punch: 'Perfurar', crop: 'Recortar' };
+    const items = this.selectedItems();
+    const shapes = items.filter((it) => it.el.type === 'shape' && it.el.path.closed);
+    if (shapes.length < 2) return this.toast('Selecione pelo menos duas formas fechadas (instâncias e linhas não entram).');
+    if (shapes.length < items.length) this.toast('Instâncias e linhas abertas ficaram de fora.');
+    this.group(labels[kind], () => {
+      this.materialize();
+      const sel = this.selectedItems().filter((it) => it.el.type === 'shape' && it.el.path.closed && !it.motion);
+      const res = V.combine(kind, sel.map((it) => ({ ...it.el, matrix: it.wm })));
+      const local = (el, it) => el && { ...el, matrix: multiply(invert(it.lm) || IDENTITY, el.matrix) };
+      const top = sel[sel.length - 1];
+      const replace = new Map([...res.replace].map(([id, el]) => [id, local(el, sel.find((it) => it.el.id === id))]));
+      const add = local(res.add, top);
+      const changes = new Map();
+      for (const it of sel) {
+        if (!changes.has(it.layer)) changes.set(it.layer, [...it.span.elements]);
+        const list = changes.get(it.layer);
+        const i = list.findIndex((e) => e?.id === it.el.id);
+        list[i] = replace.has(it.el.id) ? replace.get(it.el.id) : it.el;
+        if (add && it === top) list.splice(i + 1, 0, add);
+      }
+      for (const [layer, list] of changes) changes.set(layer, list.filter(Boolean));
+      this.replaceSpans(changes, labels[kind]);
+      const ids = add ? [add.id] : [...replace.entries()].filter(([, v]) => v).map(([, v]) => v.id);
+      this.setSelection(ids);
+    });
+  }
+
+  // ---------- amostras ----------
+  get swatches() {
+    return this.doc.swatches || DEFAULT_SWATCHES;
+  }
+  addSwatch(fill) {
+    if (!fill) return;
+    const clean = isGradient(fill) ? { type: fill.type, stops: structuredClone(fill.stops) } : fill;
+    this.setDocProps({ swatches: [...this.swatches, clean] });
+  }
+  removeSwatch(index) {
+    this.setDocProps({ swatches: this.swatches.filter((_, i) => i !== index) });
   }
 
   // ---------- edição de elementos ----------
   /** Garante que a camada ativa aceita desenho no quadro atual. Retorna o comando de timeline (ou null). */
   prepareDrawing() {
     const layer = this.activeLayer;
+    if (layer.type === 'folder' || layer.type === 'camera') {
+      this.toast(layer.type === 'folder' ? 'Pastas não têm desenho. Escolha uma camada.' : 'A camada da câmera não tem desenho.');
+      return false;
+    }
+    if (!this.isEditable(layer)) {
+      this.toast(layer.locked || !layer.visible ? (layer.locked ? 'A camada ativa está travada.' : 'A camada ativa está oculta.') : 'A pasta da camada está oculta ou travada.');
+      return false;
+    }
     if (!layer.visible) {
       this.toast('A camada ativa está oculta.');
       return false;
@@ -345,14 +640,20 @@ export class Editor {
     return ok;
   }
 
-  addElements(elements, label = 'Desenhar') {
+  /** index: posição dentro do keyframe (null = por cima; 0 = por baixo, como o balde faz). */
+  addElements(elements, label = 'Desenhar', index = null, { space = 'world' } = {}) {
     elements = this.filterRecursive(elements);
     if (!elements.length) return false;
     const pre = this.prepareDrawing();
     if (pre === false) return false;
     const layer = this.activeLayer;
+    if (space === 'world') {
+      // o desenho vem nas coordenadas da tela da timeline; a camada pode ter pai ou profundidade
+      const inv = invert(this.layerMatrixOf(layer)) || IDENTITY;
+      if (inv.some((v, i) => v !== IDENTITY[i])) elements = elements.map((el) => ({ ...el, matrix: multiply(inv, el.matrix) }));
+    }
     const start = pre ? this.frame : this.spanAt(layer).start;
-    this.run(new C.Compound(label, [pre, new C.AddElements(layer.id, start, elements)]));
+    this.run(new C.Compound(label, [pre, new C.AddElements(layer.id, start, elements, label, index)]));
     return true;
   }
 
@@ -360,33 +661,19 @@ export class Editor {
   updateSelection(label, mutate) {
     this.group(label, () => {
       this.materialize();
-      const cmds = [];
-      for (const g of this.groupSelected()) {
-        const before = g.items.map((it) => clone(it.el));
-        const after = before.map((el) => {
-          const c = clone(el);
-          mutate(c);
-          return c;
-        });
-        cmds.push(new C.UpdateElements(g.layer.id, g.span.start, before, after));
-      }
-      this.run(new C.Compound(label, cmds));
+      this.updateItems(this.selectedItems(), label, mutate);
     });
   }
 
   /** Fecha uma edição feita ao vivo: before = Map(id → clone do elemento antes). */
   commitLiveEdit(label, before) {
-    const groups = this.groupSelected(this.frameItems().filter((it) => before.has(it.el.id)));
-    const cmds = groups.map(
-      (g) => new C.UpdateElements(g.layer.id, g.span.start, g.items.map((it) => before.get(it.el.id)), g.items.map((it) => it.el)),
-    );
-    this.commit(new C.Compound(label, cmds));
+    this.endLiveEdit(label, { els: before, tweens: new Map() });
   }
 
   groupSelected(items = this.selectedItems()) {
     const map = new Map();
     for (const it of items) {
-      const key = it.layer.id;
+      const key = `${it.layer.id}:${it.span.start}`;
       if (!map.has(key)) map.set(key, { layer: it.layer, span: it.span, items: [] });
       map.get(key).items.push(it);
     }
@@ -423,7 +710,7 @@ export class Editor {
         el.matrix = multiply(translation(offset, offset), el.matrix);
         return el;
       });
-    if (this.addElements(els, 'Colar')) this.setSelection(els.map((e) => e.id));
+    if (this.addElements(els, 'Colar', null, { space: 'local' })) this.setSelection(els.map((e) => e.id));
   }
   duplicate() {
     if (!this.selection.size) return;
@@ -445,9 +732,7 @@ export class Editor {
 
   nudge(dx, dy) {
     if (!this.selection.size) return;
-    this.updateSelection('Mover', (el) => {
-      el.matrix = multiply(translation(dx, dy), el.matrix);
-    });
+    this.updateSelection('Mover', (el, it) => this.applyWorld(it, el, translation(dx, dy)));
   }
 
   /** dir: 'front' | 'forward' | 'backward' | 'back' */
@@ -485,9 +770,7 @@ export class Editor {
     const sy = b.h > 0.0001 && target.h != null ? Math.max(0.01, target.h) / b.h : 1;
     const nx = target.x ?? b.x, ny = target.y ?? b.y;
     const T = multiply(translation(nx, ny), multiply(scaling(sx, sy), translation(-b.x, -b.y)));
-    this.updateSelection('Transformar', (el) => {
-      el.matrix = multiply(T, el.matrix);
-    });
+    this.updateSelection('Transformar', (el, it) => this.applyWorld(it, el, T));
   }
 
   rotateSelection(deg) {
@@ -495,9 +778,7 @@ export class Editor {
     if (!b) return;
     const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
     const R = multiply(translation(cx, cy), multiply(rotation((deg * Math.PI) / 180), translation(-cx, -cy)));
-    this.updateSelection('Girar', (el) => {
-      el.matrix = multiply(R, el.matrix);
-    });
+    this.updateSelection('Girar', (el, it) => this.applyWorld(it, el, R));
   }
 
   /** Propriedades de instâncias selecionadas (comportamento, loop, efeito de cor). */
@@ -607,10 +888,10 @@ export class Editor {
       const b = unionBounds(items.map((it) => this.boundsOf(it)));
       const rx = registration === 'topleft' ? b.x : b.x + b.w / 2;
       const ry = registration === 'topleft' ? b.y : b.y + b.h / 2;
-      const els = items.map((it) => ({ ...clone(it.el), matrix: multiply(translation(-rx, -ry), it.el.matrix) }));
+      const els = items.map((it) => ({ ...clone(it.el), matrix: multiply(translation(-rx, -ry), it.wm || it.el.matrix) }));
       const sym = createSymbol(name || this.nextSymbolName(), type, els);
-      const inst = createInstance(sym, translation(rx, ry));
       const target = items[items.length - 1];
+      const inst = createInstance(sym, multiply(invert(target.lm || IDENTITY) || IDENTITY, translation(rx, ry)));
       const cmds = [new C.InsertLibraryEntry('items', this.doc.library.items.length, sym, 'Novo símbolo')];
       for (const g of this.groupSelected(items)) {
         cmds.push(new C.RemoveElements(g.layer.id, g.span.start, g.items.map((it) => ({ el: it.el, index: it.index }))));
@@ -646,7 +927,7 @@ export class Editor {
       symbolId,
       instanceId: item?.el.id || null,
       isolated: !item,
-      matrix: item ? multiply(this.contextMatrix, item.el.matrix) : translation(this.doc.width / 2, this.doc.height / 2),
+      matrix: item ? multiply(this.contextMatrix, item.wm || item.el.matrix) : translation(this.doc.width / 2, this.doc.height / 2),
       parentFrame: this.frame,
       parentLayerId: this.activeLayerId,
       parentSelection: [...this.selection],
@@ -737,7 +1018,7 @@ export class Editor {
       }
     }
     const entry = this.doc.library[kind].find((x) => x.id === id);
-    const key = kind === 'items' ? 'folderId' : 'parentId';
+    const key = kind === 'folders' ? 'parentId' : 'folderId';
     if (!entry || entry[key] === folderId) return;
     this.patchLibrary(kind, id, { [key]: folderId }, 'Mover para pasta');
   }

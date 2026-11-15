@@ -1,7 +1,8 @@
 // Reprodução: avança quadros no ritmo do FPS do documento.
 // O mesmo Player toca a animação no palco do editor e na janela de teste.
 
-import { renderTimeline, sceneLength } from './render.js';
+import { renderTimeline, movieLength, movieLocate, cameraAt, applyCameraTint } from './render.js';
+import { AudioEngine, movieSchedule, segmentsFrom } from './audio.js';
 
 export class Player {
   /**
@@ -11,6 +12,7 @@ export class Player {
    * @param {() => boolean} o.getLoop
    * @param {(frame:number) => void} o.onFrame
    * @param {() => void} [o.onStop]
+   * @param {() => void} [o.onLoop]  quando volta para o quadro 0
    */
   constructor(o) {
     this.o = o;
@@ -24,6 +26,7 @@ export class Player {
     this.startFrame = fromFrame >= len - 1 ? 0 : fromFrame;
     this.t0 = performance.now();
     this.lastFrame = -1;
+    this.cycle = 0;
     this.playing = true;
     this._tick();
   }
@@ -42,7 +45,12 @@ export class Player {
     let frame = this.startFrame + elapsed;
     if (frame >= len) {
       if (this.o.getLoop()) {
+        const cycle = Math.floor(frame / len);
         frame = frame % len;
+        if (cycle !== this.cycle) {
+          this.cycle = cycle;
+          this.o.onLoop?.();
+        }
       } else {
         this.o.onFrame(len - 1);
         this.stop();
@@ -58,16 +66,18 @@ export class Player {
 }
 
 /**
- * Player autônomo: toca um documento num canvas, ajustando ao tamanho do canvas.
+ * Player autônomo: toca o documento inteiro (todas as cenas em sequência, com som) num canvas.
  * Base da janela de teste e do futuro export HTML5.
  */
-export function mountPlayer(canvas, doc, { sceneIndex = 0, loop = true } = {}) {
+export function mountPlayer(canvas, doc, { loop = true } = {}) {
   const ctx = canvas.getContext('2d');
-  const scene = doc.scenes[sceneIndex];
+  const audio = new AudioEngine();
   let current = 0;
 
-  function draw(frame) {
-    current = frame;
+  function draw(f) {
+    current = f;
+    const { sceneIndex, frame } = movieLocate(doc, f);
+    const scene = doc.scenes[sceneIndex];
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth, h = canvas.clientHeight;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
@@ -86,15 +96,28 @@ export function mountPlayer(canvas, doc, { sceneIndex = 0, loop = true } = {}) {
     ctx.rect(0, 0, doc.width, doc.height);
     ctx.clip();
     renderTimeline(ctx, doc, scene, frame, { playMC: true });
+    applyCameraTint(ctx, doc, cameraAt(doc, scene, frame));
     ctx.restore();
   }
 
+  const startAudio = (f) => {
+    const { sceneIndex, frame } = movieLocate(doc, f);
+    audio.play(doc, movieSchedule(doc, segmentsFrom(doc, sceneIndex, frame, true)));
+  };
+
   const player = new Player({
-    getLength: () => sceneLength(scene),
+    getLength: () => movieLength(doc),
     getFps: () => doc.fps,
     getLoop: () => loop,
     onFrame: draw,
+    onLoop: () => startAudio(0),
+    onStop: () => audio.stop(),
   });
+  const play = player.play.bind(player);
+  player.play = (from = 0) => {
+    play(from);
+    startAudio(player.startFrame);
+  };
   window.addEventListener('resize', () => draw(current));
   draw(0);
   return player;

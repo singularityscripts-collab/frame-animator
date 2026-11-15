@@ -1,8 +1,11 @@
 // Ferramentas do palco. Cada uma pode ter: down, move, up, hover, cancel, drawWorld, drawScreen, cursor.
 
-import { multiply, invert, applyPoint, translation, scaling, rotation, drawElement } from '../player/render.js';
+import { multiply, invert, applyPoint, translation, scaling, rotation, drawElement, IDENTITY } from '../player/render.js';
+import { motionPropsAt, setKey } from '../player/tween.js';
+import * as C from './commands.js';
 import { clone } from '../model/document.js';
 import { rectPath, ellipsePath, linePath, freehandPath, makeShape, pointsBounds } from '../model/geometry.js';
+import { brushTool, eraserTool, bucketTool, eyedropperTool, gradientTool } from './tools-paint.js';
 
 const T = (x, y) => translation(x, y);
 const compose = (...ms) => ms.reduce((a, b) => multiply(a, b));
@@ -14,6 +17,12 @@ export function createTools(stage, editor) {
     oval: boxShapeTool(stage, editor, 'oval'),
     line: lineTool(stage, editor),
     pencil: pencilTool(stage, editor),
+    brush: brushTool(stage, editor),
+    bucket: bucketTool(stage, editor),
+    eraser: eraserTool(stage, editor),
+    eyedropper: eyedropperTool(stage, editor),
+    gradient: gradientTool(stage, editor),
+    camera: cameraTool(stage, editor),
     hand: handTool(stage),
     zoom: zoomTool(stage),
   };
@@ -28,35 +37,37 @@ function shapeStyle(editor) {
 }
 
 // ---------- Seleção: clicar, laço retangular, mover, escalar e girar ----------
+// Também arrasta os pontos do caminho do motion tween e as dicas de forma.
 function selectTool(stage, editor) {
   let st = null;
 
-  function snapshot() {
-    const before = new Map();
-    for (const it of editor.selectedItems()) before.set(it.el.id, clone(it.el));
-    return before;
-  }
-  function liveItems() {
-    return editor.selectedItems();
-  }
-  function restore() {
-    if (!st?.before) return;
-    for (const it of liveItems()) {
-      const b = st.before.get(it.el.id);
-      if (b) it.el.matrix = b.matrix.slice();
-    }
+  /** Itens selecionados com a matriz (no espaço da camada) de quando o arraste começou. */
+  function capture() {
+    const items = editor.selectedItems();
+    return { items: items.map((it) => ({ it, m0: it.el.matrix.slice() })), snap: editor.beginLiveEdit(items) };
   }
 
   return {
     cursor: 'default',
     down(e) {
+      // 1) dicas de forma e pontos do caminho do motion tween têm prioridade
+      const hint = stage.hitShapeHint(e.sx, e.sy);
+      if (hint) {
+        st = { mode: 'hint', hint, start: e, moved: false, before: clone(hint.span.tween) };
+        return;
+      }
+      const pathPt = stage.hitMotionPath(e.sx, e.sy);
+      if (pathPt) {
+        st = { mode: 'path', pt: pathPt, start: e, moved: false, before: clone(pathPt.it.span.tween) };
+        return;
+      }
       const fr = stage.selectionFrame();
       if (fr) {
         const h = stage.hitHandle(fr, e.sx, e.sy);
         if (h) {
           const Finv = invert(fr.F);
           if (!Finv) return;
-          st = { mode: h.type, fr, Finv, handle: h.handle, start: e, before: snapshot(), moved: false };
+          st = { mode: h.type, fr, Finv, handle: h.handle, start: e, moved: false };
           stage.setCursor(h.cursor);
           return;
         }
@@ -77,7 +88,7 @@ function selectTool(stage, editor) {
         } else if (!sel.has(id)) {
           editor.setSelection([id]);
         }
-        st = { mode: 'move', start: e, before: snapshot(), moved: false };
+        st = { mode: 'move', start: e, moved: false };
         stage.setCursor('move');
       } else {
         if (!e.shift) editor.deselect();
@@ -94,15 +105,40 @@ function selectTool(stage, editor) {
         stage.invalidate();
         return;
       }
+      if (st.mode === 'hint') {
+        st.moved = true;
+        const h = st.hint;
+        const p = applyPoint(invert(h.lm) || IDENTITY, e.wx, e.wy);
+        const hints = h.span.tween.hints.map((x) => ({ ...x }));
+        hints[h.i] = { ...hints[h.i], [h.side]: { x: p.x, y: p.y } };
+        h.span.tween = { ...h.span.tween, hints };
+        stage.invalidate();
+        return;
+      }
+      if (st.mode === 'path') {
+        st.moved = true;
+        const { it, t } = st.pt;
+        const p = applyPoint(invert(it.lm) || IDENTITY, e.wx, e.wy);
+        const tw = clone(st.before);
+        tw.props ||= {};
+        const at = motionPropsAt({ ...it.span, tween: st.before }, t);
+        for (const [k, v] of [['x', p.x], ['y', p.y]]) {
+          let keys = tw.props[k] || [];
+          if (!keys.length && t !== 0) keys = [{ t: 0, v: motionPropsAt({ ...it.span, tween: st.before }, 0)[k] }];
+          tw.props[k] = setKey(keys, t, v);
+        }
+        void at;
+        it.span.tween = tw;
+        stage.invalidate();
+        return;
+      }
       if (!st.moved) {
-        // num quadro interpolado de tween, cria o keyframe antes de mexer
-        if (editor.materialize()) {
-          st.materialized = true;
-          st.before = snapshot();
-          if (st.fr) {
-            st.fr = stage.selectionFrame();
-            st.Finv = invert(st.fr.F);
-          }
+        // num quadro interpolado de tween clássico, cria o keyframe antes de mexer
+        st.materialized = editor.materialize();
+        Object.assign(st, capture());
+        if (st.fr) {
+          st.fr = stage.selectionFrame();
+          st.Finv = invert(st.fr.F);
         }
       }
       st.moved = true;
@@ -136,9 +172,10 @@ function selectTool(stage, editor) {
         if (e.shift) a = Math.round(a / (Math.PI / 12)) * (Math.PI / 12);
         W = compose(T(c.x, c.y), rotation(a), T(-c.x, -c.y));
       }
-      for (const it of liveItems()) {
-        const b = st.before.get(it.el.id);
-        if (b) it.el.matrix = multiply(W, b.matrix);
+      // W vale no espaço da tela da timeline; cada camada pode ter pai/profundidade (lm)
+      for (const { it, m0 } of st.items) {
+        const lm = it.lm || IDENTITY;
+        editor.setLiveMatrix(it, multiply(invert(lm) || IDENTITY, multiply(W, multiply(lm, m0))));
       }
       stage.invalidate();
       editor.emit('selection');
@@ -161,19 +198,29 @@ function selectTool(stage, editor) {
         stage.invalidate();
         return;
       }
+      if (s.mode === 'hint' || s.mode === 'path') {
+        if (!s.moved) return;
+        const span = s.mode === 'hint' ? s.hint.span : s.pt.it.span;
+        const layerId = s.mode === 'hint' ? s.hint.layer.id : s.pt.it.layer.id;
+        editor.commit(new C.SetSpanProps(layerId, span.start, { tween: s.before }, { tween: span.tween }, s.mode === 'hint' ? 'Mover dica de forma' : 'Editar caminho'));
+        return;
+      }
       if (!s.moved) return;
       const label = { move: 'Mover', scale: 'Escalar', rotate: 'Girar' }[s.mode];
-      editor.commitLiveEdit(label, s.before);
+      editor.endLiveEdit(label, s.snap);
       if (s.materialized) editor.history.squash(2, label);
     },
 
     cancel() {
-      restore();
+      if (st?.snap) editor.cancelLiveEdit(st.snap);
+      if (st?.mode === 'hint') st.hint.span.tween = st.before;
+      if (st?.mode === 'path') st.pt.it.span.tween = st.before;
       st = null;
       editor.emit('selection');
     },
 
     hover(e) {
+      if (stage.hitShapeHint(e.sx, e.sy) || stage.hitMotionPath(e.sx, e.sy)) return stage.setCursor('pointer');
       const fr = stage.selectionFrame();
       const h = fr && stage.hitHandle(fr, e.sx, e.sy);
       if (h) return stage.setCursor(h.cursor);
@@ -191,6 +238,46 @@ function selectTool(stage, editor) {
       ctx.fillRect(x, y, w, h);
       ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(w), Math.round(h));
       ctx.restore();
+    },
+  };
+}
+
+// ---------- Câmera: arrastar move a câmera ----------
+function cameraTool(stage, editor) {
+  let st = null;
+  return {
+    cursor: 'move',
+    down(e) {
+      if (!editor.cameraLayer()) {
+        editor.toast('Adicione uma câmera primeiro (botão de câmera na timeline ou no painel Propriedades).');
+        return;
+      }
+      const n0 = editor.history.undoStack.length;
+      const span = editor.cameraKeyframeHere();
+      const cam = editor.cameraState();
+      st = { sx: e.sx, sy: e.sy, span, layerId: editor.cameraLayer().id, before: clone(span.camera), cam, created: editor.history.undoStack.length - n0 };
+    },
+    move(e) {
+      if (!st) return;
+      const z = (stage.view.zoom * st.cam.zoom) / 100;
+      const dx = (e.sx - st.sx) / z, dy = (e.sy - st.sy) / z;
+      const r = (st.cam.rotation * Math.PI) / 180;
+      const wx = dx * Math.cos(r) - dy * Math.sin(r), wy = dx * Math.sin(r) + dy * Math.cos(r);
+      st.span.camera = { ...st.cam, x: st.cam.x - wx, y: st.cam.y - wy };
+      stage.invalidate();
+      editor.emit('camera');
+    },
+    up() {
+      if (!st) return;
+      const s = st;
+      st = null;
+      if (JSON.stringify(s.before) === JSON.stringify(s.span.camera)) return;
+      editor.commit(new C.SetSpanProps(s.layerId, s.span.start, { camera: s.before }, { camera: s.span.camera }, 'Mover câmera'));
+      if (s.created) editor.history.squash(s.created + 1, 'Mover câmera');
+    },
+    cancel() {
+      if (st) st.span.camera = st.before;
+      st = null;
     },
   };
 }

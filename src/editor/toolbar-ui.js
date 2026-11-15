@@ -1,6 +1,7 @@
 // Barra de ferramentas (esquerda): ferramentas e cores.
 
 import { icons } from './icons.js';
+import { cssFill } from './color-ui.js';
 
 export const TOOLS = [
   { id: 'select', label: 'Seleção', key: 'V' },
@@ -8,6 +9,13 @@ export const TOOLS = [
   { id: 'oval', label: 'Oval', key: 'O' },
   { id: 'line', label: 'Linha', key: 'N' },
   { id: 'pencil', label: 'Lápis', key: 'Y' },
+  { id: 'brush', label: 'Pincel (pressão da caneta)', key: 'B' },
+  null,
+  { id: 'bucket', label: 'Balde de tinta', key: 'K' },
+  { id: 'eraser', label: 'Borracha', key: 'E' },
+  { id: 'eyedropper', label: 'Conta-gotas', key: 'I' },
+  { id: 'gradient', label: 'Transformar gradiente', key: 'F' },
+  { id: 'camera', label: 'Câmera', key: 'C' },
   null,
   { id: 'hand', label: 'Mão (segure Espaço)', key: 'H' },
   { id: 'zoom', label: 'Zoom (Alt diminui)', key: 'Z' },
@@ -77,9 +85,9 @@ export class ToolbarUI {
     const s = ed.style;
     for (const k of ['fill', 'stroke']) {
       const label = this.swatches.querySelector(`.swatch.${k}`);
-      label.style.background = s[k];
+      label.style.background = cssFill(s[k]);
       label.classList.toggle('off', !s[k + 'On']);
-      label.querySelector('input').value = s[k];
+      label.querySelector('input').value = (typeof s[k] === 'string' ? s[k] : s[k]?.stops?.[0]?.color || '#000000').slice(0, 7);
     }
   }
 }

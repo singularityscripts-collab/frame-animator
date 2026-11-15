@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('api', {
   setTitle: (t) => ipcRenderer.send('app:set-title', t),
   openPreview: (data) => ipcRenderer.send('preview:open', data),
   getPreviewData: () => ipcRenderer.invoke('preview:get-data'),
+  openAudio: () => ipcRenderer.invoke('file:open-audio'),
   exportBegin: (opts) => ipcRenderer.invoke('export:begin', opts),
   exportFrame: (id, data) => ipcRenderer.invoke('export:frame', id, data),
   exportEnd: (id) => ipcRenderer.invoke('export:end', id),

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Editor } from '../src/editor/editor.js';
 import { rectPath, makeShape } from '../src/model/geometry.js';
-import { parseDocument, serialize, createSymbol, createInstance } from '../src/model/document.js';
+import { parseDocument, serialize, createSymbol, createInstance, VERSION } from '../src/model/document.js';
 import { layerFrame, instanceFrame } from '../src/player/render.js';
 import { easeT, lerpMatrix, decompose, lerpColorEffect, colorToCT } from '../src/player/tween.js';
 
@@ -148,8 +148,8 @@ test('arquivo da versão 1 abre com biblioteca vazia', () => {
     scenes: [{ id: 's1', name: 'Cena 1', layers: [{ id: 'l1', name: 'C', frames: [{ start: 0, duration: 2, elements: [] }] }] }],
   };
   const d = parseDocument(JSON.stringify(v1));
-  assert.deepEqual(d.library, { folders: [], items: [] });
-  assert.equal(d.version, 2);
+  assert.deepEqual(d.library, { folders: [], items: [], sounds: [] });
+  assert.equal(d.version, VERSION);
   const ed = new Editor();
   ed.addElements([shape(0)]);
   ed.selectAll();
