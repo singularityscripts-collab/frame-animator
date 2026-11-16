@@ -11,7 +11,7 @@ import { toLottie } from '../export/lottie.js';
 import { frameToSVG } from '../export/svg.js';
 import { buildSpriteSheet } from '../export/spritesheet.js';
 import { importXFL } from '../model/xfl.js';
-import { traceImage } from '../model/trace.js';
+import { traceImage, traceImageAsync } from '../model/trace.js';
 import { analyzeLipSync, VISEMES } from '../model/lipsync.js';
 import { timelineBounds } from '../model/geometry.js';
 import { runExport } from './export-ui.js';
@@ -408,8 +408,15 @@ export function extendActions(actions, { editor: ed, stage, io, panels }) {
       const c = canvas(bmp.w * s, bmp.h * s);
       const ctx = c.getContext('2d', { willReadFrequently: true });
       ctx.drawImage(img, 0, 0, c.width, c.height);
-      await new Promise((res) => setTimeout(res, 30));
-      const traced = traceImage(ctx.getImageData(0, 0, c.width, c.height), { colors: Number(r.colors), minArea: Number(r.minArea), tolerance: Number(r.tolerance), smoothing: Number(r.smoothing) / 100 });
+      const traced = await traceImageAsync(
+        ctx.getImageData(0, 0, c.width, c.height),
+        { colors: Number(r.colors), minArea: Number(r.minArea), tolerance: Number(r.tolerance), smoothing: Number(r.smoothing) / 100 },
+        (done, total) => {
+          prog.update(done / total, `Cor ${Math.min(done + 1, total)} de ${total}`);
+          return prog.cancelled;
+        },
+      );
+      if (!traced) return ed.toast('Vetorização cancelada.');
       const M = multiply(it.el.matrix, [it.el.w / c.width, 0, 0, it.el.h / c.height, 0, 0]);
       const shapes = traced.map((t) => shapeFromTrace(t, t.color, M));
       if (!shapes.length) return ed.toast('Nada para vetorizar (imagem transparente?).');

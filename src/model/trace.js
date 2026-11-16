@@ -6,6 +6,15 @@ import { simplify } from './geometry.js';
 
 /** k-means em RGB. Devolve { centers: [[r,g,b]], labels: Int16Array } (-1 = transparente). */
 export function quantize(img, k = 8, iterations = 8) {
+  const gen = quantizeSteps(img, k, iterations);
+  for (;;) {
+    const r = gen.next();
+    if (r.done) return r.value;
+  }
+}
+
+/** O mesmo, como gerador: pausa (yield) a cada pedaço da etapa pesada (rotular todos os pixels). */
+function* quantizeSteps(img, k = 8, iterations = 8) {
   const { width: w, height: h, data } = img;
   const n = w * h;
   const labels = new Int16Array(n).fill(-1);
@@ -58,7 +67,13 @@ export function quantize(img, k = 8, iterations = 8) {
     });
     if (!moved) break;
   }
-  for (const i of opaque) labels[i] = nearest([data[i * 4], data[i * 4 + 1], data[i * 4 + 2]]);
+  yield;
+  const CHUNK = 120000;
+  for (let j = 0; j < opaque.length; j++) {
+    const i = opaque[j];
+    labels[i] = nearest([data[i * 4], data[i * 4 + 1], data[i * 4 + 2]]);
+    if (j % CHUNK === CHUNK - 1) yield;
+  }
   return { centers: centers.map((c) => c.map((v) => Math.round(v))), labels };
 }
 
@@ -95,12 +110,50 @@ export function smoothPolygon(poly, smoothing = 0.5, cornerDeg = 60) {
  * da maior para a menor (as menores ficam por cima).
  */
 export function traceImage(img, opts = {}) {
-  const { colors = 8, minArea = 8, tolerance = 1, smoothing = 0.6 } = opts;
+  const job = traceJob(img, opts, quantize(img, colorCount(opts)));
+  for (let ci = 0; ci < job.count; ci++) job.step(ci);
+  return job.result();
+}
+
+const colorCount = (opts) => Math.max(1, Math.min(64, opts.colors ?? 8));
+
+/**
+ * O mesmo, em pedaços (uma cor por vez), devolvendo a vez para a tela entre eles:
+ * imagens grandes não congelam a janela e a barra de progresso anda.
+ * onProgress(feito, total) é chamado a cada cor; se devolver true, para (cancelado → null).
+ */
+export async function traceImageAsync(img, opts = {}, onProgress = null) {
+  const pause = () => new Promise((r) => setTimeout(r, 0));
+  await pause();
+  // reduzir as cores também vai em pedaços
+  const gen = quantizeSteps(img, colorCount(opts));
+  let q;
+  for (;;) {
+    const r = gen.next();
+    if (r.done) {
+      q = r.value;
+      break;
+    }
+    if (onProgress?.(0, 1)) return null;
+    await pause();
+  }
+  const job = traceJob(img, opts, q);
+  for (let ci = 0; ci < job.count; ci++) {
+    if (onProgress?.(ci, job.count)) return null;
+    await pause();
+    job.step(ci);
+  }
+  onProgress?.(job.count, job.count);
+  return job.result();
+}
+
+function traceJob(img, opts, { centers, labels }) {
+  const { minArea = 8, tolerance = 1, smoothing = 0.6 } = opts;
   const { width: w, height: h } = img;
-  const { centers, labels } = quantize(img, Math.max(1, Math.min(64, colors)));
   const out = [];
   const region = new Uint8Array(w * h);
-  centers.forEach((c, ci) => {
+  const step = (ci) => {
+    const c = centers[ci];
     let any = false;
     for (let i = 0; i < labels.length; i++) {
       region[i] = labels[i] === ci ? 1 : 0;
@@ -120,6 +173,6 @@ export function traceImage(img, opts = {}) {
     }
     if (!subs.length) return;
     out.push({ color: `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`, subs, area: Math.abs(area) });
-  });
-  return out.sort((a, b) => b.area - a.area);
+  };
+  return { count: centers.length, step, result: () => out.sort((a, b) => b.area - a.area) };
 }

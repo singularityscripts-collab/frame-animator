@@ -139,6 +139,18 @@ test('M3: importar XFL lê só DOMDocument.xml, LIBRARY/ e bin/ (não a pasta in
   }
 });
 
+test('M6: vetorizar em pedaços dá o mesmo resultado, informa o progresso e pode ser cancelado', async () => {
+  const { traceImage, traceImageAsync } = await import('../src/model/trace.js');
+  const w = 60, h = 40, data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) data.set(x < 30 ? [200, 30, 30, 255] : y < 20 ? [30, 30, 200, 255] : [250, 250, 250, 255], (y * w + x) * 4);
+  const img = { width: w, height: h, data };
+  const steps = [];
+  const a = await traceImageAsync(img, { colors: 3 }, (d, t) => void steps.push([d, t]));
+  assert.deepEqual(a, traceImage(img, { colors: 3 }));
+  assert.deepEqual(steps.at(-1), [3, 3]);
+  assert.equal(await traceImageAsync(img, { colors: 3 }, (d) => d >= 1), null);
+});
+
 test('B9: export em pasta não deixa um nome "../" escapar para uma pasta vizinha', () => {
   // usa a checagem que está de verdade em main.cjs (export:write)
   const main = fs.readFileSync(new URL('../main.cjs', import.meta.url), 'utf8');
