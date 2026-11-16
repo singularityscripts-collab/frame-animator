@@ -10,8 +10,17 @@ import * as V from '../model/vector-ops.js';
 import { layerFrame, symbolById, instanceFrame, multiply, translation, invert, IDENTITY, applyPoint } from '../player/render.js';
 import { solveBones } from '../player/bones.js';
 import { measureText, textLines, lineHeight } from '../player/assets.js';
+import { clearBitmapCache } from '../player/effects.js';
 
 const P = Editor.prototype;
+
+// O "cache como bitmap" guarda a imagem de cada símbolo; qualquer mudança no documento
+// (editar o símbolo, desfazer, abrir outro arquivo) pode mudar o conteúdo, então o cache é zerado.
+const baseEmit = P.emit;
+P.emit = function (type, detail) {
+  if (type === 'doc' || type === 'load') clearBitmapCache();
+  return baseEmit.call(this, type, detail);
+};
 
 /** Atualiza propriedades dos elementos selecionados (texto, bitmap, componente, instância). */
 P.setElementProps = function (patch, label = 'Propriedades', filter = () => true) {

@@ -134,10 +134,12 @@ export function applyFilters(src, filters, px, scratch, key) {
 // ---------- cache como bitmap ----------
 const cache = new Map();
 let cacheVersion = 0;
+/** Esquece as imagens guardadas (chamado quando o documento muda: o conteúdo pode ser outro). */
 export function clearBitmapCache() {
   cache.clear();
   cacheVersion++;
 }
+export const bitmapCacheVersion = () => cacheVersion;
 
 /** Imagem do conteúdo (local) numa resolução; reaproveita enquanto nada muda. */
 export function cachedContent(key, bounds, res, draw) {

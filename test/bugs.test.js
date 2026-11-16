@@ -105,6 +105,17 @@ test('B8: XFL com quadros fora de ordem mantém cada quadro no lugar', async () 
   assert.equal(first.start, 0);
 });
 
+test('M1: editar o documento zera o cache como bitmap (senão o símbolo editado aparece antigo)', async () => {
+  const { bitmapCacheVersion } = await import('../src/player/effects.js');
+  const ed = new Editor();
+  const v0 = bitmapCacheVersion();
+  ed.addElements([makeShape({ path: linePath(0, 0, 10, 10).path, cx: 5, cy: 5, fill: null, stroke: '#000000', strokeWidth: 1 })]);
+  assert.ok(bitmapCacheVersion() > v0, 'o cache não foi zerado depois de uma edição');
+  const v1 = bitmapCacheVersion();
+  ed.undo();
+  assert.ok(bitmapCacheVersion() > v1, 'o cache não foi zerado depois de desfazer');
+});
+
 test('B9: export em pasta não deixa um nome "../" escapar para uma pasta vizinha', () => {
   // usa a checagem que está de verdade em main.cjs (export:write)
   const main = fs.readFileSync(new URL('../main.cjs', import.meta.url), 'utf8');
