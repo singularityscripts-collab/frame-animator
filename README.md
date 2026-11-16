@@ -16,8 +16,11 @@ Outros comandos:
 - `npm run smoke`: abre o Electron, salva um arquivo, abre a janela de teste, exporta MP4/MOV/GIF/PNG,
   confere os arquivos com o ffmpeg, gera o pacote HTML5 e clica num botão dentro dele, e fecha sozinho.
 - `npm run serve`: abre o editor no navegador em http://localhost:5178 (sem salvar em disco nem exportar vídeo).
+- `npm run check`: confere a sintaxe de todos os arquivos e se o player ainda vira o script do HTML5.
+- `npm run dist`: gera o instalador do Windows em `dist/` (`npm run dist:dir` gera só a pasta do app).
+  Para testar o app empacotado: `"dist/win-unpacked/Frame Animator.exe" --smoke`.
 
-Dependências: Electron, ffmpeg-static (export de vídeo) e Paper.js (geometria).
+Dependências: Electron, ffmpeg-static (export de vídeo) e Paper.js (geometria). Build: electron-builder.
 
 ## Fase 1 (pronta)
 
