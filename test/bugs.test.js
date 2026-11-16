@@ -116,6 +116,29 @@ test('M1: editar o documento zera o cache como bitmap (senão o símbolo editado
   assert.ok(bitmapCacheVersion() > v1, 'o cache não foi zerado depois de desfazer');
 });
 
+test('M3: importar XFL lê só DOMDocument.xml, LIBRARY/ e bin/ (não a pasta inteira)', async () => {
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const main = fs.readFileSync(new URL('../main.cjs', import.meta.url), 'utf8');
+  const src = main.slice(main.indexOf('const XFL_LIMIT'), main.indexOf("ipcMain.handle('file:open-animate'"));
+  const readXflFolder = new Function('fs', 'path', `${src}; return readXflFolder;`)(fsp, path);
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fa-xfl-'));
+  try {
+    await fsp.writeFile(path.join(dir, 'DOMDocument.xml'), '<DOMDocument/>');
+    await fsp.mkdir(path.join(dir, 'LIBRARY', 'Pasta'), { recursive: true });
+    await fsp.writeFile(path.join(dir, 'LIBRARY', 'Pasta', 'Bola.xml'), '<DOMSymbolItem/>');
+    await fsp.mkdir(path.join(dir, 'bin'));
+    await fsp.writeFile(path.join(dir, 'bin', 'M 1.dat'), 'x');
+    await fsp.mkdir(path.join(dir, 'Outros downloads'));
+    await fsp.writeFile(path.join(dir, 'Outros downloads', 'video.mp4'), 'nada a ver');
+    await fsp.writeFile(path.join(dir, 'planilha.xlsx'), 'nada a ver');
+    const files = await readXflFolder(dir);
+    assert.deepEqual(Object.keys(files).sort(), ['DOMDocument.xml', 'LIBRARY/Pasta/Bola.xml', 'bin/M 1.dat']);
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('B9: export em pasta não deixa um nome "../" escapar para uma pasta vizinha', () => {
   // usa a checagem que está de verdade em main.cjs (export:write)
   const main = fs.readFileSync(new URL('../main.cjs', import.meta.url), 'utf8');

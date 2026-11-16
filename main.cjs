@@ -843,11 +843,34 @@ function readZip(buf) {
   return files;
 }
 
-async function readDirRec(dir, base = dir, out = {}) {
+const XFL_LIMIT = 1024 * 1024 * 1024; // 1 GB de mídia, no máximo
+
+async function readDirRec(dir, base = dir, out = {}, total = { bytes: 0 }) {
   for (const ent of await fs.readdir(dir, { withFileTypes: true })) {
     const full = path.join(dir, ent.name);
-    if (ent.isDirectory()) await readDirRec(full, base, out);
-    else out[path.relative(base, full).split(path.sep).join('/')] = await fs.readFile(full);
+    if (ent.isDirectory()) await readDirRec(full, base, out, total);
+    else {
+      total.bytes += (await fs.stat(full)).size;
+      if (total.bytes > XFL_LIMIT) throw new Error('A pasta do XFL passa de 1 GB; não dá para importar.');
+      out[path.relative(base, full).split(path.sep).join('/')] = await fs.readFile(full);
+    }
+  }
+  return out;
+}
+
+/** Só o que o importador usa: DOMDocument.xml, LIBRARY/ e bin/ (não a pasta inteira onde o .xfl está). */
+async function readXflFolder(dir) {
+  const out = {};
+  const doc = path.join(dir, 'DOMDocument.xml');
+  try {
+    out['DOMDocument.xml'] = await fs.readFile(doc);
+  } catch {
+    throw new Error('Não achei o DOMDocument.xml ao lado do arquivo .xfl.');
+  }
+  const total = { bytes: out['DOMDocument.xml'].length };
+  for (const sub of ['LIBRARY', 'bin']) {
+    const full = path.join(dir, sub);
+    if ((await fs.stat(full).catch(() => null))?.isDirectory()) await readDirRec(full, dir, out, total);
   }
   return out;
 }
@@ -860,7 +883,7 @@ ipcMain.handle('file:open-animate', async () => {
   });
   if (r.canceled || !r.filePaths[0]) return null;
   const p = r.filePaths[0];
-  const raw = path.extname(p).toLowerCase() === '.fla' ? readZip(await fs.readFile(p)) : await readDirRec(path.dirname(p));
+  const raw = path.extname(p).toLowerCase() === '.fla' ? readZip(await fs.readFile(p)) : await readXflFolder(path.dirname(p));
   // XML vai como texto; o resto (imagens, sons) como base64
   const files = {};
   for (const [k, v] of Object.entries(raw)) files[k] = /\.(xml|xfl)$/i.test(k) ? { text: v.toString('utf8') } : { base64: v.toString('base64') };
