@@ -476,8 +476,11 @@ function timelineOf(tlNode, ctx) {
     if (t === 'folder') L.collapsed = ln.attrs.open === 'false';
     L.frames = [];
     let pos = 0;
-    for (const fn of children(ln, 'frames/DOMFrame')) {
+    // em ordem de índice (e sem sobrepor: um quadro que começa dentro do anterior é ignorado)
+    const domFrames = children(ln, 'frames/DOMFrame').sort((a, b) => f(a.attrs.index) - f(b.attrs.index));
+    for (const fn of domFrames) {
       const start = Math.max(0, Math.floor(f(fn.attrs.index)));
+      if (start < pos) continue;
       const duration = Math.max(1, Math.floor(f(fn.attrs.duration, 1)));
       if (start > pos) L.frames.push({ start: pos, duration: start - pos, elements: [] });
       const span = { start, duration, elements: L.type === 'folder' ? [] : elementsOf(child(fn, 'elements')?.children || [], ctx) };

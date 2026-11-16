@@ -182,13 +182,24 @@ export function serialize(doc) {
 
 /** Lê e valida um documento salvo. Lança erro com mensagem legível se for inválido. */
 export function parseDocument(text) {
+  try {
+    return normalizeDocument(text);
+  } catch (err) {
+    if (err instanceof TypeError || err instanceof RangeError) throw new Error('O arquivo está danificado e não deu para abrir.');
+    throw err;
+  }
+}
+
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+function normalizeDocument(text) {
   let d;
   try {
     d = JSON.parse(text);
   } catch {
     throw new Error('O arquivo não é um JSON válido.');
   }
-  if (!d || d.format !== FORMAT) throw new Error('Este arquivo não é um documento do Frame Animator.');
+  if (!isObj(d) || d.format !== FORMAT) throw new Error('Este arquivo não é um documento do Frame Animator.');
   if (typeof d.version !== 'number' || d.version > VERSION) {
     throw new Error('Este arquivo foi salvo numa versão mais nova do Frame Animator.');
   }
@@ -196,14 +207,17 @@ export function parseDocument(text) {
   d.width = num(d.width, 1280, 1, 16000);
   d.height = num(d.height, 720, 1, 16000);
   d.fps = num(d.fps, 24, 1, 120);
-  if (typeof d.background !== 'string') d.background = '#ffffff';
+  if (typeof d.background !== 'string' || !/^#[0-9a-f]{3,8}$/i.test(d.background)) d.background = '#ffffff';
+  if (Array.isArray(d.scenes)) d.scenes = d.scenes.filter(isObj);
   if (!Array.isArray(d.scenes) || !d.scenes.length) throw new Error('O documento não tem cenas.');
+  for (const sc of d.scenes) if (!Array.isArray(sc.layers)) sc.layers = [];
 
   // versão 1 não tinha biblioteca; a 4 ganhou sons
   if (!d.library || typeof d.library !== 'object') d.library = { folders: [], items: [] };
   if (!Array.isArray(d.library.sounds)) d.library.sounds = [];
   if (!Array.isArray(d.library.bitmaps)) d.library.bitmaps = [];
   d.library.bitmaps = d.library.bitmaps.filter((b) => b && typeof b.data === 'string' && b.w > 0 && b.h > 0);
+  for (const b of d.library.bitmaps) if (typeof b.mime !== 'string' || !/^image\/[\w.+-]+$/i.test(b.mime)) b.mime = 'image/png';
   for (const b of d.library.bitmaps) {
     b.id ||= uid('b');
     b.name ||= 'Imagem';
@@ -241,6 +255,7 @@ export function parseDocument(text) {
 
   for (const tl of allTimelines(d)) {
     tl.id ||= uid('s');
+    tl.layers = tl.layers.filter(isObj);
     if (!tl.layers.length) tl.layers = [createLayer('Camada 1')];
     const bitmapIds = new Set(d.library.bitmaps.map((b) => b.id));
     tl.layers.forEach((l, i) => normalizeLayer(l, i, symbolIds, soundIds, bitmapIds));
@@ -268,10 +283,26 @@ export function parseDocument(text) {
   return d;
 }
 
-function validPath(path) {
-  if (!path || typeof path !== 'object') return false;
-  if (Array.isArray(path.subs)) return path.subs.length > 0 && path.subs.every((sp) => sp && Array.isArray(sp.pts));
-  return Array.isArray(path.pts);
+const finite0 = (v) => (Number.isFinite(v) ? v : 0);
+
+/** Subcaminho com só pontos válidos ([x, y, alças…] numéricos), ou null se sobrar menos de 2. */
+function cleanSub(sp) {
+  if (!isObj(sp) || !Array.isArray(sp.pts)) return null;
+  const pts = sp.pts
+    .filter((q) => Array.isArray(q) && q.length >= 2 && Number.isFinite(q[0]) && Number.isFinite(q[1]))
+    .map((q) => [q[0], q[1], finite0(q[2]), finite0(q[3]), finite0(q[4]), finite0(q[5])]);
+  return pts.length >= 2 ? { closed: !!sp.closed, pts } : null;
+}
+
+/** Caminho limpo (um ponto quebrado no arquivo não pode derrubar o desenho), ou null. */
+function cleanPath(path) {
+  if (!isObj(path)) return null;
+  if (Array.isArray(path.subs)) {
+    const subs = path.subs.map(cleanSub).filter(Boolean);
+    return subs.length ? { ...path, subs } : null;
+  }
+  const sp = cleanSub(path);
+  return sp ? { ...path, ...sp } : null;
 }
 
 export function validFill(f) {
@@ -296,6 +327,7 @@ function normalizeLayer(l, i, symbolIds, soundIds, bitmapIds = new Set()) {
   l.locked = !!l.locked;
   l.outline = !!l.outline;
   l.color ||= LAYER_COLORS[i % LAYER_COLORS.length];
+  if (Array.isArray(l.frames)) l.frames = l.frames.filter(isObj);
   if (!Array.isArray(l.frames) || !l.frames.length) l.frames = [{ start: 0, duration: 1, elements: [] }];
   let start = 0;
   for (const f of l.frames) {
@@ -310,10 +342,11 @@ function normalizeLayer(l, i, symbolIds, soundIds, bitmapIds = new Set()) {
     if (f.sound && !SOUND_SYNC[f.sound.sync]) f.sound.sync = 'event';
     if (f.camera && typeof f.camera !== 'object') delete f.camera;
     if (!Array.isArray(f.elements)) f.elements = [];
+    for (const el of f.elements) if (isObj(el) && el.type === 'shape') el.path = cleanPath(el.path);
     f.elements = f.elements.filter(
       (el) =>
-        el &&
-        ((el.type === 'shape' && validPath(el.path)) ||
+        isObj(el) &&
+        ((el.type === 'shape' && el.path) ||
           (el.type === 'instance' && symbolIds.has(el.symbolId)) ||
           (el.type === 'text' && typeof el.text === 'string') ||
           (el.type === 'bitmap' && bitmapIds.has(el.assetId)) ||
@@ -322,7 +355,7 @@ function normalizeLayer(l, i, symbolIds, soundIds, bitmapIds = new Set()) {
     if (f.script != null && typeof f.script !== 'string') delete f.script;
     for (const el of f.elements) {
       el.id ||= uid('e');
-      if (!Array.isArray(el.matrix) || el.matrix.length !== 6) el.matrix = [1, 0, 0, 1, 0, 0];
+      if (!Array.isArray(el.matrix) || el.matrix.length !== 6 || !el.matrix.every(Number.isFinite)) el.matrix = [1, 0, 0, 1, 0, 0];
       if (el.type === 'text') {
         if (!TEXT_KINDS[el.kind]) el.kind = 'static';
         el.size = Number.isFinite(el.size) ? el.size : 24;

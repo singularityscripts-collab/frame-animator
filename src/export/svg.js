@@ -26,6 +26,12 @@ export function subsToD(subs) {
   return d;
 }
 
+/** Valores que vêm do arquivo e vão para atributos: só aceitam o formato esperado. */
+const safeColor = (c, def) => (typeof c === 'string' && /^#[0-9a-f]{3,8}$/i.test(c) ? c : def);
+const safeMime = (m) => (typeof m === 'string' && /^image\/[\w.+-]+$/i.test(m) ? m : 'image/png');
+const safeB64 = (d) => (typeof d === 'string' && /^[A-Za-z0-9+/=\s]*$/.test(d) ? d.replace(/\s/g, '') : '');
+const safeUrl = (u) => (typeof u === 'string' && /^data:image\/[\w.+-]+;base64,[A-Za-z0-9+/=]*$/.test(u) ? u : '');
+
 const mat = (m) => `matrix(${m.map(n).join(' ')})`;
 
 /**
@@ -74,7 +80,7 @@ export function frameToSVG(doc, sceneIndex, frame, opts = {}) {
       const b = doc.library.bitmaps.find((x) => x.id === it.assetId);
       if (!b) return '';
       const a = it.ct ? Math.max(0, Math.min(1, it.ct.am)) : 1;
-      return `<image transform="${mat(it.matrix)}" width="${n(it.w)}" height="${n(it.h)}" preserveAspectRatio="none" href="data:${b.mime || 'image/png'};base64,${b.data}"${a < 1 ? ` opacity="${n(a)}"` : ''}/>`;
+      return `<image transform="${mat(it.matrix)}" width="${n(it.w)}" height="${n(it.h)}" preserveAspectRatio="none" href="data:${safeMime(b.mime)};base64,${safeB64(b.data)}"${a < 1 ? ` opacity="${n(a)}"` : ''}/>`;
     }
     if (it.kind === 'text') {
       const el = it.el;
@@ -90,7 +96,7 @@ export function frameToSVG(doc, sceneIndex, frame, opts = {}) {
     }
     if (it.kind === 'component' && opts.rasterize) {
       const url = opts.rasterize(it);
-      return url ? `<image transform="${mat(it.matrix)}" width="${n(it.el.w)}" height="${n(it.el.h)}" href="${url}"/>` : '';
+      return url ? `<image transform="${mat(it.matrix)}" width="${n(it.el.w)}" height="${n(it.el.h)}" href="${safeUrl(url)}"/>` : '';
     }
     if (it.kind === 'mask') {
       const mid = id('m');
@@ -103,8 +109,8 @@ export function frameToSVG(doc, sceneIndex, frame, opts = {}) {
   const items = flattenFrame(doc, sceneIndex, frame);
   const body = items.map((x) => item(x)).join('\n');
   const cam = cameraAt(doc, doc.scenes[sceneIndex], frame);
-  const tint = cam && cam.tintAmount > 0 ? `<rect width="${doc.width}" height="${doc.height}" fill="${cam.tint || '#000000'}" opacity="${n(Math.min(1, cam.tintAmount / 100))}"/>` : '';
-  const bg = opts.transparent ? '' : `<rect width="${doc.width}" height="${doc.height}" fill="${doc.background}"/>`;
+  const tint = cam && cam.tintAmount > 0 ? `<rect width="${doc.width}" height="${doc.height}" fill="${safeColor(cam.tint, '#000000')}" opacity="${n(Math.min(1, cam.tintAmount / 100))}"/>` : '';
+  const bg = opts.transparent ? '' : `<rect width="${doc.width}" height="${doc.height}" fill="${safeColor(doc.background, '#ffffff')}"/>`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${doc.width} ${doc.height}">
 <defs>${defs.join('')}</defs>

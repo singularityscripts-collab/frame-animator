@@ -375,7 +375,15 @@ P.addBone = function (head, tail, parentId, bindId) {
     }
   }
   arm.bones.push(bone);
-  const elements = span.elements.map((e) => (e.id === bindId ? { ...e, bone: bone.id } : e));
+  // forma: ganha "pele" (dobra seguindo todos os ossos); símbolo/imagem: acompanha só este osso
+  const elements = span.elements.map((e) => {
+    if (e.id !== bindId) return e;
+    if (e.type === 'shape') {
+      const { bone: _old, ...rest } = e;
+      return { ...rest, skin: true };
+    }
+    return { ...e, bone: bone.id };
+  });
   this.group('Osso', () => {
     this.run(new C.SetSpanElements(layer.id, span.start, span.elements, elements, 'Osso'));
     this.run(new C.SetSpanProps(layer.id, span.start, { armature: span.armature }, { armature: arm }, 'Osso'));

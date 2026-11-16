@@ -664,7 +664,22 @@ export function boneTool(stage, editor) {
         const t = Math.max(0, Math.min(1, ((e.sx - b.head.x) * vx + (e.sy - b.head.y) * vy) / l2));
         return Math.hypot(b.head.x + vx * t - e.sx, b.head.y + vy * t - e.sy) <= 5;
       });
-      const boneId = hit?.el.bone || shaft?.id;
+      let boneId = hit?.el.bone || shaft?.id;
+      // forma com pele: arrastar a forma puxa o osso mais perto do clique (Alt cria um osso novo nela)
+      if (!boneId && hit?.el.skin && !e.alt && info()) {
+        const cur = info();
+        let best = Infinity;
+        for (const [id, b] of solveBones(cur.arm, cur.pose)) {
+          const vx = b.tail.x - b.head.x, vy = b.tail.y - b.head.y;
+          const l2 = vx * vx + vy * vy || 1;
+          const t = Math.max(0, Math.min(1, ((local.x - b.head.x) * vx + (local.y - b.head.y) * vy) / l2));
+          const d = Math.hypot(b.head.x + vx * t - local.x, b.head.y + vy * t - local.y);
+          if (d < best) {
+            best = d;
+            boneId = id;
+          }
+        }
+      }
       if (boneId && info()) {
         const n0 = editor.history.undoStack.length;
         const span = editor.poseKeyframeHere();
@@ -696,9 +711,14 @@ export function boneTool(stage, editor) {
         const tail = applyPoint(inv(lmOf()), e.wx, e.wy);
         if (Math.hypot(tail.x - s.head.x, tail.y - s.head.y) * stage.scale < 6) return stage.invalidate();
         const end = stage.hitTest(e.wx, e.wy);
-        const bindId = end && end.el.id !== s.startEl && end.layer.id === editor.activeLayerId ? end.el.id : null;
+        // termina em outro objeto: ele segue o osso; osso dentro de uma forma: a forma ganha pele e dobra
+        const items = editor.frameItems();
+        const startShape = s.startEl && items.some((i) => i.el.id === s.startEl && i.el.type === 'shape');
+        const endOk = end && end.layer.id === editor.activeLayerId && (end.el.id !== s.startEl || end.el.type === 'shape');
+        const bindId = endOk ? end.el.id : startShape ? s.startEl : null;
         editor.addBone(s.head, tail, s.parentId, bindId);
-        if (!bindId) editor.toast('Osso criado. Termine o próximo osso sobre um objeto para ele seguir o osso.');
+        const skinned = editor.frameItems().some((i) => i.el.skin);
+        if (!bindId && !skinned) editor.toast('Osso criado. Termine o próximo osso sobre um objeto para ele seguir o osso.');
         return;
       }
       editor.commit(new C.SetSpanProps(editor.activeLayerId, s.span.start, { armature: s.before }, { armature: s.span.armature }, 'Pose'));

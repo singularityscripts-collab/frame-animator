@@ -18,6 +18,26 @@ const FILTERS = [
 ];
 
 let win = null;
+
+// Caminhos que a interface pode gravar sem perguntar: só arquivos e pastas que o próprio usuário
+// escolheu num diálogo (ou abriu). Qualquer outro caminho vindo da página é recusado.
+const granted = new Set();
+const grant = (p) => p && granted.add(path.resolve(p));
+function isGranted(p) {
+  if (typeof p !== 'string' || !p) return false;
+  const r = path.resolve(p);
+  for (const g of granted) {
+    if (r === g) return true;
+    const rel = path.relative(g, r);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return true;
+  }
+  return false;
+}
+/** Dentro da pasta, sem escapar com "../" (nem para uma pasta vizinha de nome parecido). */
+function inside(dir, target) {
+  const rel = path.relative(dir, target);
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
 let previewWin = null;
 let previewData = null;
 let closeConfirmed = false;
@@ -70,6 +90,7 @@ function smokeTest() {
   const js = (code) => win.webContents.executeJavaScript(code);
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  grant(app.getPath('temp')); // só no smoke test
   win.webContents.once('did-finish-load', async () => {
     const fail = (msg) => {
       console.log(`SMOKE FALHOU: ${msg}`);
@@ -559,12 +580,13 @@ ipcMain.handle('file:open', async () => {
   const r = await dialog.showOpenDialog(win, { title: 'Abrir animação', filters: FILTERS, properties: ['openFile'] });
   if (r.canceled || !r.filePaths[0]) return null;
   const p = r.filePaths[0];
+  grant(p);
   return { path: p, data: await fs.readFile(p, 'utf8') };
 });
 
 ipcMain.handle('file:save', async (_e, { path: target, data, defaultName }) => {
   if (typeof data !== 'string') throw new Error('Dados inválidos');
-  let p = target;
+  let p = target && isGranted(target) ? target : null;
   if (!p) {
     const r = await dialog.showSaveDialog(win, {
       title: 'Salvar animação',
@@ -573,6 +595,7 @@ ipcMain.handle('file:save', async (_e, { path: target, data, defaultName }) => {
     });
     if (r.canceled || !r.filePath) return null;
     p = r.filePath;
+    grant(p);
   }
   // grava num arquivo temporário e renomeia, para não corromper o original se algo falhar
   const tmp = `${p}.tmp`;
@@ -621,9 +644,15 @@ ipcMain.on('preview:open', (_e, data) => {
     backgroundColor: '#111114',
     title: 'Testar cena',
     autoHideMenuBar: true,
-    webPreferences,
+    webPreferences: { ...webPreferences, preload: path.join(__dirname, 'preload-preview.cjs') },
   });
   previewWin.setMenu(null);
+  // os scripts do filme não levam esta janela para outra página; links abrem no navegador
+  previewWin.webContents.on('will-navigate', (e) => e.preventDefault());
+  previewWin.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
   previewWin.loadFile(path.join(__dirname, 'src', 'preview.html'));
   previewWin.on('closed', () => (previewWin = null));
 });
@@ -672,7 +701,7 @@ ipcMain.handle('export:begin', async (_e, o) => {
     defaultName: String(o.defaultName || 'Animação'),
     audio: (o.format === 'mp4' || o.format === 'mov') && o.audio && o.audio.byteLength > 44 ? Buffer.from(o.audio) : null,
   };
-  let out = o.path;
+  let out = o.path && isGranted(o.path) ? o.path : null;
   if (!out) {
     const r = await dialog.showSaveDialog(win, {
       title: o.format === 'png' ? 'Exportar sequência PNG (nome base dos arquivos)' : 'Exportar animação',
@@ -681,6 +710,7 @@ ipcMain.handle('export:begin', async (_e, o) => {
     });
     if (r.canceled || !r.filePath) return null;
     out = r.filePath;
+    grant(out);
   }
   const id = crypto.randomUUID();
   const job = { o, out, count: 0, stderr: '' };
@@ -849,13 +879,15 @@ ipcMain.handle('export:write', async (_e, o) => {
   if (single) {
     const f = o.files[0];
     await fs.writeFile(r.filePath, f.base64 ? Buffer.from(f.base64, 'base64') : f.text);
+    grant(r.filePath);
     return { path: r.filePath };
   }
   const dir = r.filePath.replace(/\.[^\\/.]+$/, '');
   await fs.mkdir(dir, { recursive: true });
+  grant(dir);
   for (const f of o.files) {
     const target = path.join(dir, f.name);
-    if (!target.startsWith(dir)) continue;
+    if (!inside(dir, target)) continue;
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, f.base64 ? Buffer.from(f.base64, 'base64') : f.text);
   }
@@ -865,11 +897,12 @@ ipcMain.handle('export:write', async (_e, o) => {
 ipcMain.handle('export:html5', async (_e, o) => {
   const doc = JSON.parse(o.doc);
   const files = html5Files(path.join(__dirname, 'src', 'player'), doc, o.options || {});
-  let dir = o.dir;
+  let dir = o.dir && isGranted(o.dir) ? o.dir : null;
   if (!dir) {
     const r = await dialog.showSaveDialog(win, { title: 'Exportar HTML5 (nome da pasta)', defaultPath: o.defaultName || 'animacao-html5' });
     if (r.canceled || !r.filePath) return null;
     dir = r.filePath.replace(/\.[^\\/.]+$/, '');
+    grant(dir);
   }
   await fs.mkdir(dir, { recursive: true });
   for (const [name, text] of Object.entries(files)) await fs.writeFile(path.join(dir, name), text);
