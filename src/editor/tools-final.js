@@ -6,7 +6,7 @@ import { makeShape, pointsBounds, pathBounds } from '../model/geometry.js';
 import { clone } from '../model/document.js';
 import { mlsPoint, subdivideSub } from '../player/mesh.js';
 import { solveBones, solveIK, lerpPose } from '../player/bones.js';
-import { flattenSub, measure, nearestS, pointAt } from '../player/geom.js';
+import { flattenSub, measure, nearestS, pointAt, distToSegment } from '../player/geom.js';
 import { applyEase } from '../player/ease.js';
 import * as C from './commands.js';
 
@@ -610,8 +610,6 @@ export function textTool(stage, editor) {
     down(e) {
       const hit = stage.hitTest(e.wx, e.wy);
       if (hit?.el.type === 'text') return stage.editText(hit);
-      const lm = inv(editor.layerMatrixOf(editor.activeLayer));
-      void lm;
       const el = editor.addText(e.wx, e.wy - (editor.textDefaults.size || 32) * 0.6, '');
       if (!el) return;
       const it = editor.frameItems().find((x) => x.el.id === el.id);
@@ -658,22 +656,14 @@ export function boneTool(stage, editor) {
         return;
       }
       // IK: arrastar um elemento preso a um osso (ou o próprio osso)
-      const shaft = bs.find((b) => {
-        const vx = b.tail.x - b.head.x, vy = b.tail.y - b.head.y;
-        const l2 = vx * vx + vy * vy || 1;
-        const t = Math.max(0, Math.min(1, ((e.sx - b.head.x) * vx + (e.sy - b.head.y) * vy) / l2));
-        return Math.hypot(b.head.x + vx * t - e.sx, b.head.y + vy * t - e.sy) <= 5;
-      });
+      const shaft = bs.find((b) => distToSegment(e.sx, e.sy, b.head, b.tail) <= 5);
       let boneId = hit?.el.bone || shaft?.id;
       // forma com pele: arrastar a forma puxa o osso mais perto do clique (Alt cria um osso novo nela)
       if (!boneId && hit?.el.skin && !e.alt && info()) {
         const cur = info();
         let best = Infinity;
         for (const [id, b] of solveBones(cur.arm, cur.pose)) {
-          const vx = b.tail.x - b.head.x, vy = b.tail.y - b.head.y;
-          const l2 = vx * vx + vy * vy || 1;
-          const t = Math.max(0, Math.min(1, ((local.x - b.head.x) * vx + (local.y - b.head.y) * vy) / l2));
-          const d = Math.hypot(b.head.x + vx * t - local.x, b.head.y + vy * t - local.y);
+          const d = distToSegment(local.x, local.y, b.head, b.tail);
           if (d < best) {
             best = d;
             boneId = id;

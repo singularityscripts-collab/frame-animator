@@ -4,6 +4,7 @@
 // filtros, sons e scripts (ActionScript → JavaScript, com conversão básica).
 
 import { parseXML, child, children } from './xml.js';
+import { multiply } from '../player/render.js';
 import { createDocument, createLayer, uid, parseDocument, serialize } from './document.js';
 
 // ---------- arestas ----------
@@ -125,7 +126,6 @@ export function segsToSub(segs, closed) {
 }
 
 // ---------- utilidades ----------
-const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
 const f = (v, d = 0) => {
   const x = parseFloat(v);
   return Number.isFinite(x) ? x : d;
@@ -260,7 +260,7 @@ function fillOf(node, ctx) {
     return {
       type: grad.name === 'RadialGradient' ? 'radial' : 'linear',
       stops: children(grad, 'GradientEntry').map((g) => ({ color: color(g.attrs.color || '#000000'), alpha: g.attrs.alpha != null ? f(g.attrs.alpha, 1) : 1, offset: f(g.attrs.ratio) })),
-      matrix: mul(m, [GRADIENT_SCALE, 0, 0, GRADIENT_SCALE, 0, 0]),
+      matrix: multiply(m, [GRADIENT_SCALE, 0, 0, GRADIENT_SCALE, 0, 0]),
       ...(grad.attrs.focalPointRatio ? { focal: f(grad.attrs.focalPointRatio) } : {}),
     };
   }
@@ -296,7 +296,7 @@ function centered(subs) {
 
 /** <DOMShape> → formas do editor (uma por estilo de preenchimento e uma por traço). */
 export function shapeElements(node, ctx, outer = [1, 0, 0, 1, 0, 0]) {
-  const M = mul(outer, bool(node.attrs.isDrawingObject) || child(node, 'matrix') ? matrixOf(node) : [1, 0, 0, 1, 0, 0]);
+  const M = multiply(outer, bool(node.attrs.isDrawingObject) || child(node, 'matrix') ? matrixOf(node) : [1, 0, 0, 1, 0, 0]);
   const fills = new Map(), strokes = new Map();
   for (const fs of children(node, 'fills/FillStyle')) fills.set(fs.attrs.index, fillOf(fs, ctx));
   for (const ss of children(node, 'strokes/StrokeStyle')) {
@@ -323,7 +323,7 @@ export function shapeElements(node, ctx, outer = [1, 0, 0, 1, 0, 0]) {
   const make = (subs, extra) => {
     if (!subs.length) return;
     const c = centered(subs);
-    const el = { id: uid('e'), type: 'shape', matrix: mul(M, [1, 0, 0, 1, c.cx, c.cy]), path: c.path, fill: null, stroke: null, strokeWidth: 0, ...extra(c) };
+    const el = { id: uid('e'), type: 'shape', matrix: multiply(M, [1, 0, 0, 1, c.cx, c.cy]), path: c.path, fill: null, stroke: null, strokeWidth: 0, ...extra(c) };
     out.push(el);
   };
   for (const [k, segs] of fillSegs) {
@@ -332,7 +332,7 @@ export function shapeElements(node, ctx, outer = [1, 0, 0, 1, 0, 0]) {
     const subs = chainLoops(segs).filter((l) => l.length >= 2).map((l) => segsToSub(l, true));
     make(subs, (c) => {
       let fl = fill;
-      if (fl && typeof fl === 'object' && fl.matrix) fl = { ...fl, matrix: mul([1, 0, 0, 1, -c.cx, -c.cy], fl.matrix) };
+      if (fl && typeof fl === 'object' && fl.matrix) fl = { ...fl, matrix: multiply([1, 0, 0, 1, -c.cx, -c.cy], fl.matrix) };
       if (c.path.subs) c.path.fillRule = 'evenodd';
       else c.path.fillRule = 'evenodd';
       return { fill: fl };
@@ -417,7 +417,7 @@ function textElement(node, M) {
     letterSpacing: f(at.letterSpacing),
     lineHeight: (size + f(at.lineSpacing, 2)) / size,
     width: node.attrs.autoExpand === 'true' ? 0 : f(node.attrs.width),
-    matrix: mul(M, mul(matrixOf(node), [1, 0, 0, 1, f(node.attrs.left), 0])),
+    matrix: multiply(M, multiply(matrixOf(node), [1, 0, 0, 1, f(node.attrs.left), 0])),
   };
   if (node.attrs.name) el.name = node.attrs.name;
   return el;
@@ -438,7 +438,7 @@ function elementsOf(list, ctx, M = [1, 0, 0, 1, 0, 0]) {
         id: uid('e'),
         type: 'instance',
         symbolId: sid,
-        matrix: mul(M, matrixOf(node)),
+        matrix: multiply(M, matrixOf(node)),
         behavior: st === 'graphic' ? 'graphic' : st === 'button' ? 'button' : 'movieclip',
         loop: { 'play once': 'once', 'single frame': 'single' }[node.attrs.loop] || 'loop',
         firstFrame: Math.max(0, Math.floor(f(node.attrs.firstFrame))),
@@ -456,7 +456,7 @@ function elementsOf(list, ctx, M = [1, 0, 0, 1, 0, 0]) {
     } else if (node.name === 'DOMBitmapInstance') {
       const b = ctx.bitmapByName.get(node.attrs.libraryItemName);
       if (!b) continue;
-      out.push({ id: uid('e'), type: 'bitmap', assetId: b.id, w: b.w, h: b.h, matrix: mul(M, matrixOf(node)) });
+      out.push({ id: uid('e'), type: 'bitmap', assetId: b.id, w: b.w, h: b.h, matrix: multiply(M, matrixOf(node)) });
     } else if (node.name === 'DOMStaticText' || node.name === 'DOMDynamicText' || node.name === 'DOMInputText') out.push(textElement(node, M));
   }
   return out;

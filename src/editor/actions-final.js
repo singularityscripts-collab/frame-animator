@@ -4,7 +4,7 @@
 
 import { openDialog, openProgress, esc, confirmDialog } from './ui-kit.js';
 import { serialize, clone, uid } from '../model/document.js';
-import { sceneLength, movieLength, renderTimeline, timelineLength, IDENTITY, multiply, translation } from '../player/render.js';
+import { sceneLength, movieLength, renderTimeline, timelineLength, multiply, translation } from '../player/render.js';
 import { drawText, textBox, drawComponent } from '../player/assets.js';
 import { decodeSound } from '../player/audio.js';
 import { toLottie } from '../export/lottie.js';
@@ -465,8 +465,7 @@ export function extendActions(actions, { editor: ed, stage, io, panels }) {
     const b = timelineBounds(ed.doc, sym, 0) || { x: 0, y: 0, w: 100, h: 100 };
     const cells = [];
     for (let f = 0; f < Math.min(n, 120); f++) cells.push(`<button type="button" class="fp-cell" data-f="${f}" title="Quadro ${f + 1}"><canvas width="96" height="72"></canvas><span>${f + 1}</span></button>`);
-    let picked = null;
-    const r = await openDialog({
+    await openDialog({
       title: `Seletor de quadro: ${sym.name}`,
       body: `<p class="dlg-text">Clique no quadro que esta instância deve mostrar a partir do quadro atual (cria um keyframe). Ótimo para trocar boca e expressões.</p>
         <label class="dlg-row"><span>Criar keyframe aqui</span><input type="checkbox" name="kf" checked></label>
@@ -483,15 +482,12 @@ export function extendActions(actions, { editor: ed, stage, io, panels }) {
           renderTimeline(ctx, ed.doc, sym, f, {});
           if ((it.el.firstFrame || 0) === f) btn.classList.add('current');
           btn.addEventListener('click', () => {
-            picked = f;
             dlg.querySelectorAll('.fp-cell').forEach((x) => x.classList.toggle('current', x === btn));
             ed.setFirstFrame(f, dlg.querySelector('[name="kf"]').checked);
           });
         });
       },
     });
-    void r;
-    void picked;
   });
 
   add('lipSync', [], async () => {
@@ -796,5 +792,4 @@ export function extendActions(actions, { editor: ed, stage, io, panels }) {
   });
 
   actions.rebuildKeymap();
-  void IDENTITY;
 }

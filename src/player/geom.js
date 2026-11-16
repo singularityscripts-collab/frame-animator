@@ -43,6 +43,14 @@ export function measure(points) {
   return { points, len, total: len[len.length - 1] || 0 };
 }
 
+/** Distância do ponto (px, py) ao segmento ab. */
+export function distToSegment(px, py, a, b) {
+  const vx = b.x - a.x, vy = b.y - a.y;
+  const l2 = vx * vx + vy * vy;
+  const t = l2 ? Math.max(0, Math.min(1, ((px - a.x) * vx + (py - a.y) * vy) / l2)) : 0;
+  return Math.hypot(a.x + vx * t - px, a.y + vy * t - py);
+}
+
 /** Ponto e ângulo da tangente a uma distância s do início. */
 export function pointAt(m, s) {
   const { points, len, total } = m;

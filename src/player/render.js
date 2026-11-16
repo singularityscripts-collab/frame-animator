@@ -95,7 +95,7 @@ export function isGradient(fill) {
   return !!fill && typeof fill === 'object' && (fill.type === 'linear' || fill.type === 'radial');
 }
 
-export function isBitmapFill(fill) {
+function isBitmapFill(fill) {
   return !!fill && typeof fill === 'object' && fill.type === 'bitmap';
 }
 

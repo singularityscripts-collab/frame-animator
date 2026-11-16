@@ -4,21 +4,11 @@
 // Elemento preso a um osso: el.bone = id; a matriz guardada é a de descanso.
 
 import { subdivideSub } from './mesh.js';
+import { multiply, invert, translation, rotation, IDENTITY } from './render.js';
+import { distToSegment } from './geom.js';
 
-const T = (x, y) => [1, 0, 0, 1, x, y];
-const R = (a) => [Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), 0, 0];
-const mul = (m, n) => [
-  m[0] * n[0] + m[2] * n[1],
-  m[1] * n[0] + m[3] * n[1],
-  m[0] * n[2] + m[2] * n[3],
-  m[1] * n[2] + m[3] * n[3],
-  m[0] * n[4] + m[2] * n[5] + m[4],
-  m[1] * n[4] + m[3] * n[5] + m[5],
-];
-const inv = (m) => {
-  const det = m[0] * m[3] - m[1] * m[2] || 1;
-  return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det];
-};
+// matriz inversa que nunca falha (escala zero vira identidade)
+const invSafe = (m) => invert(m) || IDENTITY;
 
 /** Ossos em ordem (pais antes dos filhos). */
 export function orderedBones(arm) {
@@ -62,8 +52,8 @@ export function solveBones(arm, pose = arm.pose || {}) {
       restHead,
       restAngle,
       restTail,
-      rest: mul(T(restHead.x, restHead.y), R(restAngle)),
-      pose: mul(T(head.x, head.y), R(angle)),
+      rest: multiply(translation(restHead.x, restHead.y), rotation(restAngle)),
+      pose: multiply(translation(head.x, head.y), rotation(angle)),
     });
   }
   return out;
@@ -81,16 +71,8 @@ export function poseElements(elements, arm, pose) {
     if (el.skin && el.type === 'shape' && !el.bone) return skinShape(el, solved);
     const s = el.bone && solved.get(el.bone);
     if (!s) return el;
-    return { ...el, matrix: mul(s.pose, mul(inv(s.rest), el.matrix)) };
+    return { ...el, matrix: multiply(s.pose, multiply(invSafe(s.rest), el.matrix)) };
   });
-}
-
-/** Distância do ponto ao segmento ab. */
-function segDist(px, py, a, b) {
-  const vx = b.x - a.x, vy = b.y - a.y;
-  const l2 = vx * vx + vy * vy;
-  const t = l2 ? Math.max(0, Math.min(1, ((px - a.x) * vx + (py - a.y) * vy) / l2)) : 0;
-  return Math.hypot(a.x + vx * t - px, a.y + vy * t - py);
 }
 
 /**
@@ -101,7 +83,7 @@ function skinMatrix(bones, x, y) {
   const acc = [0, 0, 0, 0, 0, 0];
   let sw = 0;
   for (const b of bones) {
-    const w = 1 / (segDist(x, y, b.restHead, b.restTail) + b.soft) ** 4;
+    const w = 1 / (distToSegment(x, y, b.restHead, b.restTail) + b.soft) ** 4;
     for (let k = 0; k < 6; k++) acc[k] += w * b.M[k];
     sw += w;
   }
@@ -138,16 +120,16 @@ function densify(sp, matrix) {
 
 function skinShape(el, solved) {
   if (!solved.size) return el;
-  const bones = [...solved.values()].map((s) => ({ restHead: s.restHead, restTail: s.restTail, soft: Math.max(4, Math.hypot(s.restTail.x - s.restHead.x, s.restTail.y - s.restHead.y) * 0.08), M: mul(s.pose, inv(s.rest)) }));
+  const bones = [...solved.values()].map((s) => ({ restHead: s.restHead, restTail: s.restTail, soft: Math.max(4, Math.hypot(s.restTail.x - s.restHead.x, s.restTail.y - s.restHead.y) * 0.08), M: multiply(s.pose, invSafe(s.rest)) }));
   const m = el.matrix;
-  const toLocal = inv(m);
+  const toLocal = invSafe(m);
   const subs = (el.path.subs || [el.path]).map((sp) => {
     const d = densify(sp, m);
     return {
       closed: !!sp.closed,
       pts: d.pts.map((q) => {
         const p = applyM(m, q[0], q[1]);
-        const M = mul(toLocal, mul(skinMatrix(bones, p.x, p.y), m)); // local → local, com a pele
+        const M = multiply(toLocal, multiply(skinMatrix(bones, p.x, p.y), m)); // local → local, com a pele
         const np = applyM(M, q[0], q[1]);
         // alças: só a parte linear (giro/escala) da mistura no ponto
         const h = (dx, dy) => [M[0] * dx + M[2] * dy, M[1] * dx + M[3] * dy];

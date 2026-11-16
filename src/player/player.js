@@ -1,8 +1,5 @@
-// Reprodução: avança quadros no ritmo do FPS do documento.
-// O mesmo Player toca a animação no palco do editor e na janela de teste.
-
-import { renderTimeline, movieLength, movieLocate, cameraAt, applyCameraTint } from './render.js';
-import { AudioEngine, movieSchedule, segmentsFrom } from './audio.js';
+// Reprodução: avança quadros no ritmo do FPS do documento (relógio do palco do editor).
+// A janela de teste e o HTML5 usam o runtime interativo (runtime.js).
 
 export class Player {
   /**
@@ -65,60 +62,3 @@ export class Player {
   };
 }
 
-/**
- * Player autônomo: toca o documento inteiro (todas as cenas em sequência, com som) num canvas.
- * Base da janela de teste e do futuro export HTML5.
- */
-export function mountPlayer(canvas, doc, { loop = true } = {}) {
-  const ctx = canvas.getContext('2d');
-  const audio = new AudioEngine();
-  let current = 0;
-
-  function draw(f) {
-    current = f;
-    const { sceneIndex, frame } = movieLocate(doc, f);
-    const scene = doc.scenes[sceneIndex];
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-    }
-    const scale = Math.min(w / doc.width, h / doc.height);
-    const ox = (w - doc.width * scale) / 2, oy = (h - doc.height * scale) / 2;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
-    ctx.fillStyle = doc.background;
-    ctx.fillRect(0, 0, doc.width, doc.height);
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, doc.width, doc.height);
-    ctx.clip();
-    renderTimeline(ctx, doc, scene, frame, { playMC: true });
-    applyCameraTint(ctx, doc, cameraAt(doc, scene, frame));
-    ctx.restore();
-  }
-
-  const startAudio = (f) => {
-    const { sceneIndex, frame } = movieLocate(doc, f);
-    audio.play(doc, movieSchedule(doc, segmentsFrom(doc, sceneIndex, frame, true)));
-  };
-
-  const player = new Player({
-    getLength: () => movieLength(doc),
-    getFps: () => doc.fps,
-    getLoop: () => loop,
-    onFrame: draw,
-    onLoop: () => startAudio(0),
-    onStop: () => audio.stop(),
-  });
-  const play = player.play.bind(player);
-  player.play = (from = 0) => {
-    play(from);
-    startAudio(player.startFrame);
-  };
-  window.addEventListener('resize', () => draw(current));
-  draw(0);
-  return player;
-}

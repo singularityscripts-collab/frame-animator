@@ -383,17 +383,3 @@ export function soundUsage(doc) {
   return count;
 }
 
-/** Camadas que estão dentro de uma pasta (direta ou indiretamente). */
-export function folderDescendants(tl, folderId) {
-  const out = [];
-  const walk = (id) => {
-    for (const l of tl.layers) {
-      if (l.folderId === id) {
-        out.push(l);
-        if (l.type === 'folder') walk(l.id);
-      }
-    }
-  };
-  walk(folderId);
-  return out;
-}

@@ -142,7 +142,6 @@ P.optimizeCurves = function (amount = 50) {
   const tol = 0.2 + (amount / 100) * 6;
   this.updateSelection('Otimizar curvas', (el) => {
     if (el.type !== 'shape') return;
-    const paper = V.getPaper();
     const item = V.toPaper(el.path);
     const kids = item.className === 'CompoundPath' ? item.children : [item];
     for (const k of kids) if (k.segments.length > 3) k.simplify(tol);
@@ -150,7 +149,6 @@ P.optimizeCurves = function (amount = 50) {
     if (!res) return;
     el.path = res.path;
     el.matrix = multiply(el.matrix, translation(res.cx, res.cy));
-    void paper;
   });
 };
 
@@ -405,7 +403,6 @@ P.poseKeyframeHere = function (layer = this.activeLayer) {
   const span = this.spanAt(layer);
   if (!span?.armature) return span;
   if (span.start !== this.frame) {
-    const lf = layerFrame(layer, this.frame, this.timeline);
     const r = TL.insertKeyframe(layer.frames, this.frame);
     if (r) {
       const ns = r.frames.find((s) => s.start === this.frame);
@@ -421,7 +418,6 @@ P.poseKeyframeHere = function (layer = this.activeLayer) {
         ns.elements = span.elements.map((e) => ({ ...clone(e), id: uid('e') }));
       }
       this.run(new C.SetLayerFrames(layer.id, layer.frames, r.frames, 'Keyframe de pose', this.frame, this.frame));
-      void lf;
     }
   }
   return this.spanAt(layer);
@@ -496,7 +492,6 @@ P.replaceAll = function (query, replacement, opts = {}) {
       n++;
       return replacement;
     });
-  const tls = [...this.doc.scenes, ...this.doc.library.items];
   const after = clone({ scenes: this.doc.scenes, items: this.doc.library.items });
   for (const tl of [...after.scenes, ...after.items]) {
     for (const layer of tl.layers) {
@@ -512,7 +507,6 @@ P.replaceAll = function (query, replacement, opts = {}) {
     }
   }
   for (const s of after.items) s.name = sub(s.name);
-  void tls;
   if (!n) return 0;
   this.run({
     label: 'Substituir',

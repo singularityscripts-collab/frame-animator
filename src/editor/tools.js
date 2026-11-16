@@ -137,13 +137,11 @@ function selectTool(stage, editor) {
         const p = applyPoint(invert(it.lm) || IDENTITY, e.wx, e.wy);
         const tw = clone(st.before);
         tw.props ||= {};
-        const at = motionPropsAt({ ...it.span, tween: st.before }, t);
         for (const [k, v] of [['x', p.x], ['y', p.y]]) {
           let keys = tw.props[k] || [];
           if (!keys.length && t !== 0) keys = [{ t: 0, v: motionPropsAt({ ...it.span, tween: st.before }, 0)[k] }];
           tw.props[k] = setKey(keys, t, v);
         }
-        void at;
         it.span.tween = tw;
         stage.invalidate();
         return;

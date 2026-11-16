@@ -172,11 +172,6 @@ export function timelineBounds(doc, tl, frame, depth = 0) {
   return pts.length ? pointsBounds(pts) : null;
 }
 
-/** Caixa alinhada aos eixos do elemento no espaço da timeline. */
-export function elementWorldBounds(el, doc, offset = 0, mcTime = 0) {
-  return pointsBounds(localBoxCorners(el.matrix, elementLocalBounds(el, doc, offset, mcTime)));
-}
-
 export function unionBounds(list) {
   const pts = [];
   for (const b of list) pts.push({ x: b.x, y: b.y }, { x: b.x + b.w, y: b.y + b.h });

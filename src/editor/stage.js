@@ -512,13 +512,10 @@ export class Stage {
   }
 
   render() {
-    const { ctx, canvas, dpr, view, editor } = this;
+    const { ctx, canvas, dpr, editor } = this;
     const doc = editor.doc;
     const playing = editor.player.playing;
-    const z = view.zoom;
     const sceneBase = this.deviceView();
-    void z;
-    void view;
     const base = multiply(sceneBase, editor.contextMatrix);
     const stack = editor.editStack;
     const isolated = stack[0]?.isolated;

@@ -5,8 +5,6 @@
 //                                 pan (-100 a 100), fadeIn (s), fadeOut (s) }
 // biblioteca: doc.library.sounds = [{ id, name, folderId, mime, data (base64), duration (s) }]
 
-import { timelineLength } from './render.js';
-
 export function soundById(doc, id) {
   return doc.library?.sounds?.find((s) => s.id === id) || null;
 }
@@ -70,13 +68,6 @@ export function movieSchedule(doc, segments) {
     t += (seg.to - seg.from + 1) / doc.fps;
   }
   return out;
-}
-
-/** Segmentos de uma cena até o fim (ou de todas as cenas a partir de uma). */
-export function segmentsFrom(doc, sceneIndex, frame, allScenes = false) {
-  const segs = [{ sceneIndex, from: frame, to: timelineLength(doc.scenes[sceneIndex]) - 1 }];
-  if (allScenes) for (let i = sceneIndex + 1; i < doc.scenes.length; i++) segs.push({ sceneIndex: i, from: 0, to: timelineLength(doc.scenes[i]) - 1 });
-  return segs;
 }
 
 // ---------- decodificar ----------
