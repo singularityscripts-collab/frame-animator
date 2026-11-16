@@ -10,13 +10,47 @@
     "start": "electron .",
     "smoke": "electron . --smoke",
     "serve": "node scripts/serve.mjs",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "check": "node scripts/check.mjs",
+    "dist": "electron-builder --win nsis",
+    "dist:dir": "electron-builder --win --dir"
   },
   "devDependencies": {
-    "electron": "^45.3.2"
+    "electron": "^45.3.3",
+    "electron-builder": "^26.18.0"
   },
   "dependencies": {
     "ffmpeg-static": "^5.3.0",
     "paper": "^0.17.0"
+  },
+  "author": "Frame Animator",
+  "build": {
+    "appId": "app.frameanimator.editor",
+    "productName": "Frame Animator",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "preload-preview.cjs",
+      "bundler.cjs",
+      "src/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
   }
 }
