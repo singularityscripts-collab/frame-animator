@@ -89,7 +89,7 @@ export const ACTION_LABELS = {
   clearKeyframe: 'Limpar keyframe', insertBlankKeyframe: 'Keyframe vazio', newLayer: 'Nova camada', deleteLayer: 'Apagar camada', toggleMulti: 'Editar vários quadros',
   toggleCamera: 'Câmera', newLayerFolder: 'Nova pasta de camadas', addMotionGuide: 'Guia de movimento', layerProperties: 'Propriedades da camada', createMotionTween: 'Motion tween',
   createShapeTween: 'Shape tween', addShapeHint: 'Dica de forma', removeShapeHints: 'Tirar dicas de forma', copyFrames: 'Copiar quadros', cutFrames: 'Recortar quadros',
-  pasteFrames: 'Colar quadros', pasteFramesOverwrite: 'Colar e substituir quadros', reverseFrames: 'Inverter quadros', distributeToKeyframes: 'Distribuir para keyframes',
+  pasteFrames: 'Colar quadros (substitui)', pasteFramesOverwrite: 'Colar quadros (nome antigo)', pasteFramesInsert: 'Colar inserindo quadros', toggleClassicTween: 'Criar/tirar tween clássico', playRangeFromSelection: 'Faixa de reprodução = seleção', clearPlayRange: 'Tirar faixa de reprodução', reverseFrames: 'Inverter quadros', distributeToKeyframes: 'Distribuir para keyframes',
   distributeToLayers: 'Distribuir para camadas', showProperties: 'Propriedades', motionEditor: 'Editor de movimento', customEase: 'Easing personalizado', importSound: 'Importar som',
   newScene: 'Nova cena', duplicateScene: 'Duplicar cena', deleteScene: 'Apagar cena', renameScene: 'Renomear cena', prevScene: 'Cena anterior', nextScene: 'Próxima cena',
   combineUnion: 'Unir formas', combineIntersect: 'Interseção', combinePunch: 'Perfurar', combineCrop: 'Recortar formas', showColors: 'Cores',

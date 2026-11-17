@@ -199,6 +199,7 @@ export function createActions({ editor, stage, io, ui = {} }) {
     editSymbol: { keys: ['Ctrl+E'], run: editSymbol },
     showLibrary: { keys: ['Ctrl+L'], run: () => ui.showTab?.('library') },
     createClassicTween: { keys: [], run: () => ed.createClassicTween() },
+    toggleClassicTween: { keys: ['Ctrl+T'], run: () => ed.toggleClassicTween() },
     removeTween: { keys: [], run: () => ed.removeTween() },
     // Editar
     undo: { keys: ['Ctrl+Z'], run: () => ed.undo() },
@@ -266,7 +267,11 @@ export function createActions({ editor, stage, io, ui = {} }) {
     copyFrames: { keys: ['Ctrl+Alt+C'], run: () => ed.copyFrames() },
     cutFrames: { keys: ['Ctrl+Alt+X'], run: () => ed.cutFrames() },
     pasteFrames: { keys: ['Ctrl+Alt+V'], run: () => ed.pasteFrames(false) },
-    pasteFramesOverwrite: { keys: [], run: () => ed.pasteFrames(true) },
+    pasteFramesInsert: { keys: ['Ctrl+Alt+Shift+V'], run: () => ed.pasteFrames(true) },
+    // nome antigo (atalhos personalizados salvos): hoje colar já substitui
+    pasteFramesOverwrite: { keys: [], run: () => ed.pasteFrames(false) },
+    playRangeFromSelection: { keys: [], run: () => ed.hasFrameRange() ? ed.setPlayRange(ed.frameRange()) : ed.toast('Selecione os quadros da faixa na timeline (arraste ou Shift+clique).') },
+    clearPlayRange: { keys: [], run: () => ed.setPlayRange(null) },
     reverseFrames: { keys: [], run: () => ed.reverseFrames() },
     distributeToKeyframes: { keys: ['Ctrl+Shift+K'], run: () => ed.distributeToKeyframes() },
     distributeToLayers: { keys: ['Ctrl+Shift+D'], run: () => ed.distributeToLayers() },

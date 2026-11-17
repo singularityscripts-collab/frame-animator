@@ -5,7 +5,14 @@ import { icons } from './icons.js';
 import { showContextMenu } from './ui-kit.js';
 import { soundById, decodeSound, computePeaks } from '../player/audio.js';
 
-const CW = 12; // largura da célula de quadro
+// largura da célula de quadro (zoom da timeline, guardado neste computador)
+let CW = 12;
+try {
+  const v = Number(localStorage.getItem('fa-tl-cw'));
+  if (v >= 6 && v <= 32) CW = v;
+} catch {
+  // sem armazenamento: começa no zoom padrão
+}
 const RH = 24; // altura da linha (igual a --row-h)
 const INDENT = 14;
 
@@ -102,6 +109,7 @@ export class TimelineUI {
     editor.on('frameSel', () => this.redraw());
     editor.on('options', () => {
       this.updateToolbar();
+      this.updateReadout();
       this.redraw();
     });
     editor.on('playing', () => this.updateToolbar());
@@ -149,6 +157,15 @@ export class TimelineUI {
     this.cameraBtn = btn('camera', 'Câmera da cena (liga/desliga)', 'toggleCamera');
 
     bar.appendChild(Object.assign(document.createElement('div'), { className: 'spacer' }));
+    // zoom da grade de quadros (também Ctrl+roda do mouse em cima da timeline)
+    const zoom = document.createElement('label');
+    zoom.className = 'tl-opt tl-zoom';
+    zoom.title = 'Zoom da timeline (Ctrl+roda do mouse em cima dos quadros)';
+    zoom.innerHTML = '<span aria-hidden="true">−</span><input type="range" min="6" max="32" step="1" aria-label="Zoom da timeline"><span aria-hidden="true">+</span>';
+    this.zoomInput = zoom.querySelector('input');
+    this.zoomInput.value = CW;
+    this.zoomInput.addEventListener('input', () => this.zoomAt(Number(this.zoomInput.value) / CW));
+    bar.appendChild(zoom);
     btn('test', 'Testar filme numa janela (Ctrl+Enter)', 'testScene');
   }
 
@@ -197,7 +214,9 @@ export class TimelineUI {
   updateReadout() {
     const ed = this.editor;
     const secs = (ed.frame / ed.doc.fps).toFixed(2).replace('.', ',');
-    this.readout.innerHTML = `Quadro <b>${ed.frame + 1}</b> / ${ed.length} · ${secs} s · ${ed.doc.fps} fps`;
+    const pr = ed.playRange;
+    const range = pr ? ` · <span class="tl-range" title="Faixa de reprodução: o play e o loop ficam só nela (clique direito na régua para mudar)">faixa ${pr.from + 1}–${pr.to + 1}</span>` : '';
+    this.readout.innerHTML = `Quadro <b>${ed.frame + 1}</b> / ${ed.length} · ${secs} s · ${ed.doc.fps} fps${range}`;
   }
 
   buildCorner() {
@@ -394,6 +413,10 @@ export class TimelineUI {
   }
 
   // ---------- grade de quadros ----------
+  // Clique: vai para o quadro. Arrastar no vazio ou num quadro comum: seleciona um intervalo.
+  // Shift+clique: estende o intervalo a partir do último clique. Arrastar um keyframe: move o
+  // keyframe. Arrastar dentro do intervalo selecionado: move os quadros (Alt: copia).
+  // Ctrl+arrastar começa uma seleção mesmo em cima de um keyframe. Ctrl+roda: zoom.
   bindFrames() {
     const fc = this.framesCanvas;
     const pick = (e) => {
@@ -409,6 +432,7 @@ export class TimelineUI {
         .map((r) => r.layer)
         .filter((l) => l.type !== 'folder')
         .map((l) => l.id);
+    const rowOf = (id) => this.rows.findIndex((r) => r.layer.id === id);
 
     fc.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
@@ -416,26 +440,79 @@ export class TimelineUI {
       ed.stop();
       const { frame, row } = pick(e);
       const layer = this.rows[row]?.layer;
-      // Shift: estende o intervalo a partir do que já estava
-      const anchor = e.shiftKey && ed.frameSel ? { frame: ed.frame, row: this.rows.findIndex((r) => r.layer.id === ed.activeLayerId) } : { frame, row };
-      if (layer) ed.setActiveLayer(layer.id);
-      if (e.shiftKey && ed.frameSel) ed.setFrameSelection({ from: ed.frameSel.from, to: frame, layerIds: layersBetween(anchor.row, row) });
-      else ed.setFrameSelection(null);
-      ed.setFrame(frame);
-      fc.setPointerCapture(e.pointerId);
+      if (!layer) return;
+      try {
+        fc.setPointerCapture(e.pointerId);
+      } catch {
+        // ponteiro que não dá para capturar (evento sintético): segue sem captura
+      }
+      const sel = ed.frameSel;
+      const insideSel = sel && frame >= sel.from && frame <= sel.to && sel.layerIds.includes(layer.id);
+      const span = layer.type !== 'folder' ? layer.frames.find((s) => s.start === frame) : null;
+      let mode;
+      if (e.shiftKey) {
+        // Shift: intervalo do último clique (ou do quadro atual na camada ativa) até aqui
+        const a = this.selAnchor && rowOf(this.selAnchor.layerId) >= 0 ? this.selAnchor : { frame: ed.frame, layerId: ed.activeLayerId };
+        this.selAnchor = a;
+        ed.setActiveLayer(layer.id);
+        ed.setFrameSelection({ from: a.frame, to: frame, layerIds: layersBetween(rowOf(a.layerId), row) });
+        ed.setFrame(frame);
+        mode = 'select';
+      } else if (insideSel && ed.hasFrameRange() && !e.ctrlKey) mode = 'range';
+      else if (span && !e.ctrlKey && layer.type !== 'folder') mode = 'key';
+      else mode = 'select';
+      if (!e.shiftKey) {
+        this.selAnchor = { frame, layerId: layer.id };
+        ed.setActiveLayer(layer.id);
+        if (mode !== 'range') ed.setFrameSelection(null);
+        ed.setFrame(frame);
+      }
+      const start = { frame, row };
+      this.drag = null;
       const move = (ev) => {
         const p = pick(ev);
-        if (p.frame !== anchor.frame || p.row !== anchor.row) {
-          ed.setFrameSelection({ from: anchor.frame, to: p.frame, layerIds: layersBetween(anchor.row, p.row) });
+        if (mode === 'key' || mode === 'range') {
+          const delta = p.frame - start.frame;
+          if (!this.drag && !delta) return;
+          // arraste de quadros: a agulha acompanha o destino
+          const from = mode === 'key' ? frame : sel.from;
+          const dest = Math.max(0, from + delta);
+          this.drag = { mode, delta: dest - from, layerId: layer.id, from, to: mode === 'key' ? frame : sel.to, layerIds: mode === 'key' ? [layer.id] : sel.layerIds, copy: ev.altKey };
+          this.redraw();
+          return;
+        }
+        if (p.frame !== start.frame || p.row !== start.row || e.shiftKey) {
+          const a = this.selAnchor;
+          ed.setFrameSelection({ from: a.frame, to: p.frame, layerIds: layersBetween(rowOf(a.layerId), p.row) });
         }
         ed.setFrame(p.frame);
       };
-      const up = () => {
+      const up = (ev) => {
         fc.removeEventListener('pointermove', move);
         fc.removeEventListener('pointerup', up);
+        const d = this.drag;
+        this.drag = null;
+        if (d && d.delta) {
+          if (d.mode === 'key') ed.moveKeyframeTo(d.layerId, d.from, d.from + d.delta);
+          else ed.moveFrameRange(d.delta, ev.altKey);
+        } else if (mode === 'range') {
+          // clique (sem arrastar) dentro da seleção: só vai para o quadro
+          ed.setFrameSelection(null);
+        }
+        this.redraw();
       };
       fc.addEventListener('pointermove', move);
       fc.addEventListener('pointerup', up);
+    });
+    fc.addEventListener('pointermove', (e) => {
+      if (e.buttons) return;
+      // cursor diz o que o arraste vai fazer
+      const { frame, row } = pick(e);
+      const layer = this.rows[row]?.layer;
+      const sel = this.editor.frameSel;
+      const inSel = sel && this.editor.hasFrameRange() && frame >= sel.from && frame <= sel.to && sel.layerIds.includes(layer?.id);
+      const onKey = layer && layer.type !== 'folder' && layer.frames.some((s) => s.start === frame);
+      fc.style.cursor = !e.ctrlKey && (inSel || onKey) ? 'grab' : 'default';
     });
     fc.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -448,26 +525,51 @@ export class TimelineUI {
       const inside = sel && frame >= sel.from && frame <= sel.to && sel.layerIds.includes(layer.id);
       if (!inside) ed.setFrameSelection(null);
       ed.setActiveLayer(layer.id);
-      ed.setFrame(frame);
+      // com intervalo, a agulha não sai do lugar (o menu age no intervalo inteiro)
+      if (!inside) ed.setFrame(frame);
       this.frameMenu(e.clientX, e.clientY, frame);
     });
     fc.addEventListener('wheel', (e) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        return this.zoomAt(e.deltaY < 0 ? 1.25 : 0.8, e.clientX - fc.getBoundingClientRect().left);
+      }
       if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
         e.preventDefault();
         this.hscroll.scrollLeft += e.shiftKey ? e.deltaY : e.deltaX;
       }
     });
 
+    // ---------- régua: agulha, marcadores do onion skin e faixa de reprodução ----------
     const rc = this.rulerCanvas;
+    const xOf = (e) => e.clientX - rc.getBoundingClientRect().left;
+    const frameAt = (x) => Math.max(0, Math.floor((x + this.scrollX) / CW));
     rc.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       const ed = this.editor;
       ed.stop();
-      ed.setFrameSelection(null);
-      const at = (ev) => Math.max(0, Math.floor((ev.clientX - rc.getBoundingClientRect().left + this.scrollX) / CW));
-      ed.setFrame(at(e));
-      rc.setPointerCapture(e.pointerId);
-      const move = (ev) => ed.setFrame(at(ev));
+      try {
+        rc.setPointerCapture(e.pointerId);
+      } catch {
+        // idem
+      }
+      const h = this.rulerHandleAt(xOf(e), e.clientY - rc.getBoundingClientRect().top);
+      let move;
+      if (h) {
+        // arrasta um marcador
+        move = (ev) => {
+          const f = Math.round((xOf(ev) + this.scrollX) / CW);
+          if (h === 'onionBefore') ed.setOnion({ before: Math.max(0, Math.min(50, ed.frame - f)) });
+          if (h === 'onionAfter') ed.setOnion({ after: Math.max(0, Math.min(50, f - ed.frame - 1)) });
+          const r = ed.playRange;
+          if (h === 'rangeIn' && r) ed.setPlayRange({ from: Math.min(Math.max(0, f), r.to), to: r.to });
+          if (h === 'rangeOut' && r) ed.setPlayRange({ from: r.from, to: Math.max(r.from, f - 1) });
+        };
+      } else {
+        ed.setFrameSelection(null);
+        ed.setFrame(frameAt(xOf(e)));
+        move = (ev) => ed.setFrame(frameAt(xOf(ev)));
+      }
       const up = () => {
         rc.removeEventListener('pointermove', move);
         rc.removeEventListener('pointerup', up);
@@ -475,10 +577,67 @@ export class TimelineUI {
       rc.addEventListener('pointermove', move);
       rc.addEventListener('pointerup', up);
     });
+    rc.addEventListener('pointermove', (e) => {
+      if (e.buttons) return;
+      const h = this.rulerHandleAt(xOf(e), e.clientY - rc.getBoundingClientRect().top);
+      rc.style.cursor = h ? 'ew-resize' : 'pointer';
+      rc.title = h ? { onionBefore: 'Arraste: quadros do onion skin antes', onionAfter: 'Arraste: quadros do onion skin depois', rangeIn: 'Arraste: início da faixa de reprodução', rangeOut: 'Arraste: fim da faixa de reprodução' }[h] : 'Clique ou arraste para ir aos quadros · clique direito: faixa de reprodução';
+    });
+    rc.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const ed = this.editor;
+      const f = frameAt(xOf(e));
+      const r = ed.playRange;
+      showContextMenu(e.clientX, e.clientY, [
+        { label: `Início da faixa no quadro ${f + 1}`, run: () => ed.setPlayRange({ from: f, to: r ? Math.max(f, r.to) : ed.length - 1 }) },
+        { label: `Fim da faixa no quadro ${f + 1}`, run: () => ed.setPlayRange({ from: r ? Math.min(f, r.from) : 0, to: f }) },
+        { label: 'Faixa = quadros selecionados', run: () => this.actions.run('playRangeFromSelection'), disabled: !ed.hasFrameRange() },
+        { label: 'Tirar faixa de reprodução', run: () => ed.setPlayRange(null), disabled: !r },
+        '-',
+        { label: ed.onion.enabled ? 'Desligar onion skin' : 'Ligar onion skin', hint: 'Alt+Shift+O', run: () => this.actions.run('toggleOnion') },
+      ]);
+    });
     rc.addEventListener('wheel', (e) => {
       e.preventDefault();
+      if (e.ctrlKey) return this.zoomAt(e.deltaY < 0 ? 1.25 : 0.8, xOf(e));
       this.hscroll.scrollLeft += e.deltaY + e.deltaX;
     });
+  }
+
+  /** Marcador da régua sob o ponteiro: 'onionBefore' | 'onionAfter' | 'rangeIn' | 'rangeOut' | null. */
+  rulerHandleAt(x, y) {
+    const ed = this.editor;
+    const near = (f) => Math.abs(f * CW - this.scrollX - x) <= 5;
+    const r = ed.playRange;
+    if (r && y <= 14) {
+      if (near(r.from)) return 'rangeIn';
+      if (near(r.to + 1)) return 'rangeOut';
+    }
+    if (ed.onion.enabled && y > 12) {
+      if (near(ed.frame - ed.onion.before)) return 'onionBefore';
+      if (near(ed.frame + 1 + ed.onion.after)) return 'onionAfter';
+    }
+    return null;
+  }
+
+  /** Zoom da grade de quadros (largura de cada quadro de 6 a 32 px), mantendo o quadro sob o cursor. */
+  zoomAt(factor, x = this.hscroll.clientWidth / 2) {
+    const f = (x + this.scrollX) / CW;
+    this.setZoom(CW * factor);
+    this.hscroll.scrollLeft = Math.max(0, f * CW - x);
+  }
+
+  setZoom(cw) {
+    const v = Math.max(6, Math.min(32, Math.round(cw)));
+    if (v === CW) return;
+    CW = v;
+    try {
+      localStorage.setItem('fa-tl-cw', String(v));
+    } catch {
+      // sem armazenamento: o zoom só vale nesta sessão
+    }
+    if (this.zoomInput) this.zoomInput.value = v;
+    this.redraw();
   }
 
   frameMenu(x, y, frame) {
@@ -488,13 +647,19 @@ export class TimelineUI {
     const run = (id) => () => this.actions.run(id);
     const range = ed.hasFrameRange();
     const isCam = layer.type === 'camera';
-    const tweenItems = span?.tween
-      ? [{ label: 'Remover tween', run: run('removeTween') }]
-      : [
-          { label: 'Criar tween clássico', run: run('createClassicTween'), disabled: !span },
-          { label: 'Criar motion tween', run: run('createMotionTween'), disabled: !span || isCam },
-          { label: 'Criar shape tween', run: run('createShapeTween'), disabled: !span || isCam },
-        ];
+    // com intervalo: os tweens valem para todos os trechos dele
+    const spans = range ? ed.rangeSpans() : span ? [{ span }] : [];
+    const anyTween = spans.some((x) => x.span.tween);
+    const allTween = spans.length && spans.every((x) => x.span.tween);
+    const n = range ? ` (${spans.length} ${spans.length === 1 ? 'trecho' : 'trechos'})` : '';
+    const tweenItems = [
+      ...(allTween ? [] : [
+        { label: 'Criar tween clássico' + n, hint: 'Ctrl+T', run: run('createClassicTween'), disabled: !spans.length },
+        { label: 'Criar motion tween' + n, run: run('createMotionTween'), disabled: !spans.length || isCam },
+        { label: 'Criar shape tween' + n, run: run('createShapeTween'), disabled: !spans.length || isCam },
+      ]),
+      ...(anyTween ? [{ label: 'Remover tween' + n, hint: allTween ? 'Ctrl+T' : '', run: run('removeTween') }] : []),
+    ];
     showContextMenu(x, y, [
       ...tweenItems,
       '-',
@@ -507,9 +672,13 @@ export class TimelineUI {
       '-',
       { label: 'Recortar quadros', hint: 'Ctrl+Alt+X', run: run('cutFrames') },
       { label: 'Copiar quadros', hint: 'Ctrl+Alt+C', run: run('copyFrames') },
-      { label: 'Colar quadros', hint: 'Ctrl+Alt+V', run: run('pasteFrames'), disabled: !ed.frameClipboard },
-      { label: 'Colar e substituir quadros', run: run('pasteFramesOverwrite'), disabled: !ed.frameClipboard },
+      { label: 'Colar quadros (substitui)', hint: 'Ctrl+Alt+V', run: run('pasteFrames'), disabled: !ed.frameClipboard },
+      { label: 'Colar inserindo (empurra o resto)', hint: 'Ctrl+Alt+Shift+V', run: run('pasteFramesInsert'), disabled: !ed.frameClipboard },
       { label: 'Inverter quadros', run: run('reverseFrames'), disabled: !range },
+      '-',
+      range
+        ? { label: 'Tocar só estes quadros (faixa de reprodução)', run: run('playRangeFromSelection') }
+        : { label: 'Tirar faixa de reprodução', run: run('clearPlayRange'), disabled: !ed.playRange },
       '-',
       { label: 'Rótulo e som do quadro…', run: run('showProperties') },
     ]);
@@ -647,6 +816,39 @@ export class TimelineUI {
       ctx.strokeStyle = C.selected;
       ctx.lineWidth = 2;
       ctx.strokeRect(ed.frame * CW - sx + 1, ar * RH + 1, CW - 2, RH - 2);
+    }
+    // fora da faixa de reprodução: escurece (o que não vai tocar)
+    const pr = ed.playRange;
+    if (pr) {
+      ctx.fillStyle = 'rgba(0,0,0,0.28)';
+      ctx.fillRect(0, 0, pr.from * CW - sx, h);
+      ctx.fillRect((pr.to + 1) * CW - sx, 0, w, h);
+    }
+    // arrastando keyframe ou quadros: onde vão parar
+    const d = this.drag;
+    if (d?.delta) {
+      ctx.save();
+      ctx.strokeStyle = d.copy ? '#30d158' : '#ffd60a';
+      ctx.fillStyle = d.copy ? 'rgba(48,209,88,0.18)' : 'rgba(255,214,10,0.18)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 2]);
+      rows.forEach(({ layer }, r) => {
+        if (!d.layerIds.includes(layer.id)) return;
+        const x = (d.from + d.delta) * CW - sx;
+        const wd = (d.to - d.from + 1) * CW;
+        ctx.fillRect(x, r * RH + 1, wd, RH - 2);
+        ctx.strokeRect(x + 1, r * RH + 2, wd - 2, RH - 4);
+      });
+      ctx.restore();
+      ctx.font = 'bold 11px "Segoe UI", system-ui, sans-serif';
+      const label = `${d.delta > 0 ? '+' : ''}${d.delta} → quadro ${d.from + d.delta + 1}${d.copy ? ' (cópia)' : ''}`;
+      const r0 = rows.findIndex((r) => d.layerIds.includes(r.layer.id));
+      const lx = (d.from + d.delta) * CW - sx + 4, ly = Math.max(0, r0) * RH - 16;
+      ctx.fillStyle = 'rgba(20,20,24,0.92)';
+      ctx.fillRect(lx - 3, Math.max(0, ly) , ctx.measureText(label).width + 8, 15);
+      ctx.fillStyle = '#fff';
+      ctx.textBaseline = 'top';
+      ctx.fillText(label, lx + 1, Math.max(0, ly) + 2);
     }
     const px = Math.round(ed.frame * CW - sx + CW / 2);
     ctx.fillStyle = C.playhead;
@@ -804,6 +1006,34 @@ export class TimelineUI {
       const o = ed.onion;
       band(Math.max(0, ed.frame - o.before), ed.frame, o.beforeColor, 0.35);
       band(ed.frame + 1, ed.frame + 1 + o.after, o.afterColor, 0.35);
+      // alças do onion skin (embaixo da régua): arrastar muda quantos quadros aparecem
+      for (const [f, color, dir] of [
+        [ed.frame - o.before, o.beforeColor, -1],
+        [ed.frame + 1 + o.after, o.afterColor, 1],
+      ]) {
+        const x = f * CW - sx;
+        ctx.fillStyle = color;
+        ctx.fillRect(x - 1, 12, 2, h - 12);
+        ctx.beginPath();
+        ctx.moveTo(x, h - 1);
+        ctx.lineTo(x + dir * 6, h - 5);
+        ctx.lineTo(x, h - 9);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    // faixa de reprodução: colchetes no início e no fim
+    const pr = ed.playRange;
+    if (pr) {
+      const x0 = pr.from * CW - sx, x1 = (pr.to + 1) * CW - sx;
+      ctx.fillStyle = 'rgba(48,209,88,0.16)';
+      ctx.fillRect(x0, 0, x1 - x0, h);
+      ctx.fillStyle = '#30d158';
+      ctx.fillRect(x0, 0, x1 - x0, 2);
+      ctx.fillRect(x0, 0, 2, h);
+      ctx.fillRect(x0, 0, 6, 4);
+      ctx.fillRect(x1 - 2, 0, 2, h);
+      ctx.fillRect(x1 - 6, 0, 6, 4);
     }
     if (ed.multi.enabled) {
       band(Math.max(0, ed.frame - ed.multi.before), ed.frame + ed.multi.after + 1, '#ffffff', 0.12);

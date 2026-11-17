@@ -19,8 +19,8 @@ Objetivo: deixar as funções que já existem fáceis, previsíveis e gostosas d
 |---|---|---|
 | 0 | Auditoria | **pronta** |
 | 1 | Rigging | **pronta** |
-| 2 | Desenho e seleção | **pronta** (esperando "próxima etapa") |
-| 3 | Timeline e animação | pendente |
+| 2 | Desenho e seleção | **pronta** |
+| 3 | Timeline e animação | **pronta** (esperando "próxima etapa") |
 | 4 | Interface e atalhos | pendente |
 | 5 | Desempenho e estabilidade | pendente |
 | 6 | Polimento visual | pendente |
@@ -234,7 +234,75 @@ Todos os itens R1–R12 abaixo foram resolvidos. Arquivos novos:
 
 ---
 
-## Etapa 3: Timeline e animação
+## Etapa 3: Timeline e animação (pronta)
+
+### O que foi feito
+
+**Selecionar intervalos (T1, T2)**
+- Clique num quadro e Shift+clique em outro seleciona o intervalo, também entre camadas. Antes só funcionava se já houvesse um intervalo arrastado.
+- O clique direito dentro da seleção mantém a seleção e não move a agulha.
+- O menu de clique direito age no intervalo inteiro: "Criar tween clássico (2 trechos)", "Remover tween (2 trechos)" e assim por diante.
+
+**Arrastar (T3)**
+- **Keyframe:** arrastar um keyframe move o keyframe.
+  - O trecho de antes estica ou encolhe e o fim do trecho fica no lugar.
+  - Ele não passa por cima de outro keyframe.
+  - O primeiro keyframe arrastado para a direita deixa quadros vazios antes.
+- **Intervalo selecionado:** arrastar move os quadros, que substituem o destino e deixam vazio na origem. Com **Alt**, copia.
+- **Durante o arraste:** um fantasma amarelo (verde na cópia) mostra onde os quadros vão parar, com "+3 → quadro 10", e a agulha acompanha.
+- **Seleção a partir de um keyframe:** Ctrl+arrastar começa uma seleção mesmo em cima de um keyframe.
+- **Cursor:** vira "mão" quando o arraste vai mover alguma coisa.
+
+**Colar (T4)**
+- "Colar quadros" (Ctrl+Alt+V) agora **substitui** a partir do quadro (ou do começo da seleção). Colar no último quadro não cria mais um quadro a mais.
+- "Colar inserindo" (Ctrl+Alt+Shift+V) empurra o resto, como antes.
+- O que foi colado fica selecionado.
+
+**Tween e easing (T5)**
+- **Ctrl+T** cria tween clássico no quadro ou no intervalo. Se todos já têm tween, tira.
+- Motion e shape tween também valem para o intervalo.
+- **Easing visual:** quatro botões com a curva desenhada (constante, entrada suave, saída suave, suave nos dois) e uma prévia da curva atual. O seletor completo e o editor de curva continuam.
+
+**Onion skin (T6)**
+- Alças na régua: arrastar muda quantos quadros aparecem antes e depois.
+- O clique direito na régua liga e desliga o onion skin.
+
+**Zoom da timeline (T7)**
+- Ctrl+roda do mouse sobre os quadros ou a régua, mantendo o quadro sob o cursor, ou o controle deslizante na barra.
+- O zoom vai de 6 a 32 px por quadro e fica guardado neste computador.
+
+**Faixa de reprodução (T8)**
+- **Como definir:**
+  - clique direito na régua: "Início da faixa" / "Fim da faixa";
+  - no menu de quadros: "Tocar só estes quadros";
+  - arrastando os colchetes verdes na régua.
+- **No uso:**
+  - Play e loop ficam só na faixa, inclusive o som.
+  - Fora da faixa, a grade fica escurecida, e o contador mostra "faixa 1–12".
+- A faixa vale só no editor (não vai para o arquivo) e é zerada ao abrir outro arquivo.
+
+**Correções no caminho**
+- O painel Propriedades não atualizava o texto "Intervalo: quadros X a Y" ao mudar a seleção da timeline.
+- Ao abrir outro arquivo, o modo dos ossos e o osso selecionado voltam ao padrão.
+
+### Como testar
+
+1. Desenhe uma bola e aperte F6 nos quadros 7 e 13. Mova a bola nos keyframes.
+2. Clique no quadro 1, Shift+clique no 12 e aperte **Ctrl+T**: tween nos dois trechos.
+3. Clique direito dentro da seleção e escolha "Tocar só estes quadros". Aperte Enter: o loop fica em 1–12.
+4. Arraste o keyframe do quadro 7 para o 9.
+5. Selecione os quadros 1–4 e arraste com Alt para a frente: cópia.
+6. Ligue o onion skin e arraste as alças coloridas embaixo da régua.
+7. Ctrl+roda do mouse sobre a timeline para dar zoom.
+8. Num quadro com tween, clique em "Saída suave" no painel.
+
+### Pendências da etapa
+
+- **Seleção que começa num keyframe:** arrastar a partir de um keyframe move o keyframe. Para selecionar começando num keyframe, use Ctrl+arrastar ou Shift+clique. É o mesmo comportamento do Animate, mas pode pegar alguém de surpresa.
+- **Duração de um trecho:** ainda não dá para arrastar o fim de um trecho sem keyframe depois para mudar a duração. Isso continua com F5 / Shift+F5.
+- **Atalhos com modificador:** o navegador de teste não mandou o Ctrl junto com a roda nem o Alt junto com o arraste. Testei com eventos que levam a tecla e funcionou; vale conferir no app com o mouse.
+
+### Problemas da auditoria (todos resolvidos)
 
 | # | Imp. | Problema (visto no teste) |
 |---|---|---|
@@ -289,8 +357,12 @@ Todos os itens R1–R12 abaixo foram resolvidos. Arquivos novos:
 - **Etapa 1:** rigging refeito, com modos, rig único por camada, vínculo visível, IK estável com FK, pinos e limites, auto-key, ações de pose e painel de hierarquia.
   - 87 testes passando, `npm run check` ok e `npm run smoke` (Electron) ok.
   - Testado com mouse no app: boneco de 8 ossos e ciclo de caminhada com espelhar e copiar/colar pose.
-  - Ainda sem commit.
+  - Commit e6a1b6d (junto com a Etapa 2), enviado ao GitHub.
 - **Etapa 2:** pincel e lápis com estabilizador e pressão certa; palco congelado durante o traço; seleção com Alt, destaque e arraste pelo vão; alças com girar visível e medidas; borracha só na camada ativa e respeitando ossos; conta-gotas sem trocar de ferramenta.
   - 92 testes passando (5 novos em `test/drawing.test.js`), `npm run check` ok e `npm run smoke` (Electron) ok.
   - Testado com mouse e caneta simulada no app.
+  - Commit e6a1b6d (junto com a Etapa 1), enviado ao GitHub.
+- **Etapa 3:** Shift+clique e menu agindo no intervalo; arrastar keyframes e quadros (Alt copia); colar substituindo; Ctrl+T e easing com um clique; alças do onion skin na régua; zoom da timeline; faixa de reprodução.
+  - 98 testes passando (6 novos em `test/timeline.test.js`), `npm run check` ok e `npm run smoke` (Electron) ok.
+  - Testado com mouse no app: bola com 3 keyframes, tween no intervalo, faixa 1–12 em loop, keyframe arrastado e cópia por arraste.
   - Ainda sem commit.

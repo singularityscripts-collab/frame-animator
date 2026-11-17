@@ -7,9 +7,10 @@ export class Player {
    * @param {() => number} o.getLength   total de quadros
    * @param {() => number} o.getFps
    * @param {() => boolean} o.getLoop
+   * @param {() => {from:number,to:number}} [o.getRange]  faixa de reprodução (padrão: tudo)
    * @param {(frame:number) => void} o.onFrame
    * @param {() => void} [o.onStop]
-   * @param {() => void} [o.onLoop]  quando volta para o quadro 0
+   * @param {() => void} [o.onLoop]  quando volta para o começo da faixa
    */
   constructor(o) {
     this.o = o;
@@ -17,10 +18,18 @@ export class Player {
     this._raf = 0;
   }
 
+  bounds() {
+    const len = this.o.getLength();
+    const r = this.o.getRange?.();
+    if (!r) return { from: 0, to: len - 1 };
+    return { from: Math.max(0, Math.min(r.from, len - 1)), to: Math.max(0, Math.min(r.to, len - 1)) };
+  }
+
   play(fromFrame = 0) {
     if (this.playing) return;
-    const len = this.o.getLength();
-    this.startFrame = fromFrame >= len - 1 ? 0 : fromFrame;
+    const { from, to } = this.bounds();
+    // fora da faixa ou já no fim dela: começa do início da faixa
+    this.startFrame = fromFrame < from || fromFrame >= to ? from : fromFrame;
     this.t0 = performance.now();
     this.lastFrame = -1;
     this.cycle = 0;
@@ -37,19 +46,20 @@ export class Player {
 
   _tick = () => {
     if (!this.playing) return;
-    const len = this.o.getLength();
+    const { from, to } = this.bounds();
+    const span = to - from + 1;
     const elapsed = Math.floor(((performance.now() - this.t0) * this.o.getFps()) / 1000);
     let frame = this.startFrame + elapsed;
-    if (frame >= len) {
+    if (frame > to) {
       if (this.o.getLoop()) {
-        const cycle = Math.floor(frame / len);
-        frame = frame % len;
+        const cycle = Math.floor((frame - from) / span);
+        frame = from + ((frame - from) % span);
         if (cycle !== this.cycle) {
           this.cycle = cycle;
           this.o.onLoop?.();
         }
       } else {
-        this.o.onFrame(len - 1);
+        this.o.onFrame(to);
         this.stop();
         return;
       }
@@ -61,4 +71,3 @@ export class Player {
     this._raf = requestAnimationFrame(this._tick);
   };
 }
-

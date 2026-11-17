@@ -84,6 +84,7 @@ export class Editor {
       getLength: () => this.length,
       getFps: () => this.doc.fps,
       getLoop: () => this.loop,
+      getRange: () => this.playBounds?.(),
       onFrame: (f) => {
         this.frame = f;
         this.emit('frame');
@@ -117,6 +118,9 @@ export class Editor {
     this.activeLayerId = (this.scene.layers.find((l) => l.type !== 'camera' && l.type !== 'folder') || this.scene.layers[0]).id;
     this.selection = new Set();
     this.frameSel = null;
+    // faixa de reprodução e modo dos ossos são do arquivo aberto, não passam para o próximo
+    this.playRange = null;
+    if (this._rig) Object.assign(this._rig, { mode: null, selected: null });
     this.history.clear();
     this.filePath = filePath;
     this.emit('load');

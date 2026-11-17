@@ -4,7 +4,7 @@
 
 import { esc } from './ui-kit.js';
 import { SYMBOL_TYPES, SOUND_SYNC, LABEL_TYPES } from '../model/document.js';
-import { EASE_LABELS } from '../player/ease.js';
+import { EASE_LABELS, EASES, applyEase } from '../player/ease.js';
 import { BUILTIN_PRESETS } from './presets.js';
 import { solidOf } from './tools-paint.js';
 import { buildRig, refreshRig } from './rig-ui.js';
@@ -91,9 +91,11 @@ export class PropertiesUI {
     } else {
       const nextKf = span && ed.activeLayer.frames[ed.activeLayer.frames.indexOf(span) + 1];
       const tw = span?.tween;
-      const sig = span ? [span.start, span.duration, tw?.type, tw?.easeType, !!nextKf, span.sound?.id, span.sound?.sync, span.label ? 1 : 0, tw?.hints?.length].join(':') : '-';
+      const sig = span ? [span.start, span.duration, tw?.type, tw?.easeType, !!nextKf, span.sound?.id, span.sound?.sync, span.label ? 1 : 0, tw?.hints?.length, tw?.ease, tw?.easeCurve ? JSON.stringify(tw.easeCurve) : ''].join(':') : '-';
       mode = `none:${ed.tool}:${sig}:${ed.activeLayerId}:${ed.activeLayer.type}:${ed.editStack.length}:${!!ed.cameraLayer()}:${ed.doc.library.sounds.length}`;
     }
+    // o texto do intervalo selecionado muda com a seleção da timeline
+    if (!items.length && ed.hasFrameRange()) mode += `|sel:${JSON.stringify(ed.frameRange())}`;
     mode += `|${finalSig(ed, items)}|${ed.tool === 'bone' ? 'rig' : ''}`;
     if (mode !== this.mode) {
       this.mode = mode;
@@ -281,7 +283,27 @@ export class PropertiesUI {
       </div>`;
     if (tw) {
       const easeType = tw.easeType || 'classic';
+      // curvinha de um easing (x = tempo, y = quanto já andou)
+      const curve = (fn) => {
+        const pts = [];
+        for (let i = 0; i <= 24; i++) {
+          const t = i / 24;
+          pts.push(`${(2 + t * 36).toFixed(1)},${(26 - Math.max(-0.2, Math.min(1.2, fn(t))) * 22).toFixed(1)}`);
+        }
+        return `<svg viewBox="0 0 40 30" width="40" height="30" aria-hidden="true"><path d="M2 26H38M2 4V26" stroke="currentColor" stroke-opacity=".25" fill="none"/><polyline points="${pts.join(' ')}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+      };
+      const isLinear = easeType === 'classic' && !tw.ease;
+      const quick = [
+        ['linear', 'Constante', EASES.linear],
+        ['quadIn', 'Entrada suave (acelera)', EASES.quadIn],
+        ['quadOut', 'Saída suave (desacelera)', EASES.quadOut],
+        ['quadInOut', 'Suave nos dois', EASES.quadInOut],
+      ];
       html += `
+        <div class="ease-quick" role="group" aria-label="Easing rápido">
+          ${quick.map(([k, l, fn]) => `<button type="button" class="ease-btn ${(k === 'linear' ? isLinear : easeType === k) ? 'on' : ''}" data-ease="${k}" title="${l}">${curve(fn)}</button>`).join('')}
+          <div class="ease-now" title="Curva atual deste tween">${curve((t) => applyEase(t, tw))}<span>atual</span></div>
+        </div>
         <div class="prop-grid" style="margin-top:6px">
           <label class="field wide"><span style="flex:1">Easing</span>
             <select data-tw="easeType" style="flex:0 0 150px">
@@ -515,6 +537,8 @@ export class PropertiesUI {
         ed.setCameraProps({ [k]: v });
       });
     });
+    // easing com um clique: os quatro mais usados
+    q('[data-ease]').forEach((b) => b.addEventListener('click', () => ed.setTweenProps({ easeType: b.dataset.ease === 'linear' ? undefined : b.dataset.ease, ease: 0 })));
     q('[data-a]').forEach((b) =>
       b.addEventListener('click', async () => {
         const a = b.dataset.a;

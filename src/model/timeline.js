@@ -292,3 +292,57 @@ export function convertRange(frames, from, to, blank = false) {
   }
   return { frames: normalize(fr), frame: from };
 }
+
+// ---------- arrastar na timeline ----------
+
+const isBlankSpan = (s) => !s.elements.length && !s.tween && !s.label && !s.script && !s.sound && !s.armature && !s.camera;
+
+/**
+ * Arrasta o keyframe que começa em `start` para `to`. Ele não passa por cima dos vizinhos:
+ * o trecho anterior estica ou encolhe, e o fim do trecho fica onde está (se houver keyframe depois).
+ * O primeiro keyframe arrastado para a direita deixa quadros vazios antes dele.
+ */
+export function moveKeyframe(frames, start, to) {
+  const fr = clone(frames);
+  const i = fr.findIndex((s) => s.start === start);
+  if (i < 0) return null;
+  const s = fr[i], prev = fr[i - 1], next = fr[i + 1];
+  // um vazio que só existe por causa de um arraste anterior pode sumir
+  const blankLead = i === 1 && prev && isBlankSpan(prev);
+  const lo = prev ? (blankLead ? 0 : prev.start + 1) : 0;
+  const hi = next ? next.start - 1 : Infinity;
+  const ns = Math.max(lo, Math.min(hi, Math.round(to)));
+  if (ns === start) return null;
+  if (next) s.duration = next.start - ns;
+  if (prev) {
+    if (ns === 0) fr.splice(i - 1, 1);
+    else prev.duration = ns - prev.start;
+  } else if (ns > 0) fr.unshift({ start: 0, duration: ns, elements: [] });
+  return { frames: normalize(fr), frame: ns };
+}
+
+/** Troca os quadros do intervalo por um trecho vazio (o resto não anda). */
+export function blankRange(frames, from, to) {
+  const len = lengthOf(frames);
+  if (from >= len) return clone(frames);
+  const t = Math.min(to, len - 1);
+  const fr = splitRange(frames, from, t);
+  const before = fr.filter((s) => s.start < from), after = fr.filter((s) => s.start > t);
+  // o tween que apontava para dentro do intervalo perde o destino
+  const last = before[before.length - 1];
+  if (last?.tween && last.tween.type !== 'motion' && !after.length) delete last.tween;
+  return normalize([...before, { start: from, duration: t - from + 1, elements: [] }, ...after]);
+}
+
+/**
+ * Arrasta os quadros do intervalo `delta` quadros para o lado: eles substituem o que está no
+ * destino e deixam quadros vazios onde estavam (copy: deixa os originais).
+ */
+export function moveRange(frames, from, to, delta, { copy = false } = {}) {
+  const dest = Math.max(0, from + Math.round(delta));
+  if (dest === from && !copy) return null;
+  const slice = extractRange(frames, from, to);
+  const base = copy ? clone(frames) : blankRange(frames, from, to);
+  const r = insertSpans(base, dest, slice, { overwrite: true });
+  return { frames: r.frames, frame: dest };
+}

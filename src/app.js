@@ -96,13 +96,15 @@ let lastScrub = -1;
 function startAudio() {
   const s = editor.scene;
   if (editor.editStack.length) return;
-  const len = editor.length;
-  audio.play(editor.doc, sceneSchedule(editor.doc, s, editor.frame, len - 1, editor.doc.fps));
+  const b = editor.playBounds();
+  const from = editor.frame < b.from || editor.frame >= b.to ? b.from : editor.frame;
+  audio.play(editor.doc, sceneSchedule(editor.doc, s, from, b.to, editor.doc.fps));
 }
 editor.on('playing', () => (editor.player.playing ? startAudio() : audio.stop()));
 editor.on('loop', () => {
   audio.stop();
-  if (!editor.editStack.length) audio.play(editor.doc, sceneSchedule(editor.doc, editor.scene, 0, editor.length - 1, editor.doc.fps));
+  const b = editor.playBounds();
+  if (!editor.editStack.length) audio.play(editor.doc, sceneSchedule(editor.doc, editor.scene, b.from, b.to, editor.doc.fps));
 });
 // scrub: ao arrastar a agulha, toca um pedacinho dos sons "stream"
 editor.on('frame', () => {

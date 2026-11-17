@@ -2,7 +2,7 @@
 // rótulos, som, cenas, intervalos de quadros, distribuir e presets de movimento.
 // São métodos acrescentados à classe Editor.
 
-import { Editor } from './editor.js';
+import { Editor, DEFAULT_TWEEN } from './editor.js';
 import * as C from './commands.js';
 import * as TL from '../model/timeline.js';
 import { createLayer, createScene, clone, cloneElementsWithNewIds, uid, uniqueName, soundUsage } from '../model/document.js';
@@ -507,19 +507,30 @@ P.removeFrameRange = function (label = 'Remover quadros') {
   this.setFrameSelection(null);
 };
 
-/** Cola os quadros copiados no quadro atual, a partir da camada ativa (uma linha por camada). */
-P.pasteFrames = function (overwrite = false) {
+/**
+ * Cola os quadros copiados a partir do quadro atual (ou do começo do intervalo selecionado),
+ * a partir da camada ativa (uma linha por camada). Por padrão substitui o que está lá, sem
+ * empurrar o resto; insert: true abre espaço e empurra os quadros seguintes.
+ * Os quadros colados ficam selecionados.
+ */
+P.pasteFrames = function (insert = false) {
   const rows = this.frameClipboard;
   if (!rows?.length) return this.toast('Copie quadros primeiro (Ctrl+Alt+C).');
-  const start = this.layerIndex(this.activeLayerId);
+  const sel = this.hasFrameRange() ? this.frameRange() : null;
+  const at = sel ? sel.from : this.frame;
+  const firstId = sel ? this.layers.find((l) => sel.layerIds.includes(l.id))?.id || this.activeLayerId : this.activeLayerId;
+  const start = this.layerIndex(firstId);
   const targets = this.layers.slice(start).filter((l) => l.type !== 'folder' && l.type !== 'camera').slice(0, rows.length);
   if (targets.length < rows.length) this.toast(`Faltam camadas: ${rows.length - targets.length} linha(s) não coladas.`);
+  const label = insert ? 'Colar inserindo quadros' : 'Colar quadros';
   const cmds = targets.map((layer, k) => {
-    const r = TL.insertSpans(layer.frames, this.frame, rows[k], { overwrite });
-    return new C.SetLayerFrames(layer.id, layer.frames, r.frames, 'Colar quadros', this.frame, this.frame);
+    const r = TL.insertSpans(layer.frames, at, rows[k], { overwrite: !insert });
+    return new C.SetLayerFrames(layer.id, layer.frames, r.frames, label, this.frame, at);
   });
   this.stop();
-  this.run(new C.Compound(overwrite ? 'Colar e substituir quadros' : 'Colar quadros', cmds));
+  this.run(new C.Compound(label, cmds));
+  const n = TL.lengthOf(rows[0]);
+  this.setFrameSelection({ from: at, to: at + n - 1, layerIds: targets.map((l) => l.id) });
 };
 
 P.reverseFrames = function () {
@@ -543,6 +554,133 @@ P.timelineOp = function (name) {
     if (name === 'insertFrame') return this.rangeOp('Inserir quadros', (fr) => TL.insertFrames(fr, r.from, r.to - r.from + 1));
   }
   return baseTimelineOp.call(this, name);
+};
+
+// ---------- tween no intervalo selecionado ----------
+// Com quadros selecionados na timeline, criar ou tirar tween vale para todos os trechos do
+// intervalo (em todas as camadas da seleção), num passo só de desfazer.
+
+/** Trechos que o intervalo pega: { layer, span, next } de cada camada da seleção. */
+P.rangeSpans = function (r = this.frameRange()) {
+  const out = [];
+  for (const layer of this.rangeLayers(r)) {
+    layer.frames.forEach((span, i) => {
+      if (span.start <= r.to && span.start + span.duration > r.from) out.push({ layer, span, next: layer.frames[i + 1] || null });
+    });
+  }
+  return out;
+};
+
+const TWEEN_LABEL = { classic: 'Criar tween clássico', motion: 'Criar motion tween', shape: 'Criar shape tween' };
+
+/** Cria o tween em cada trecho do intervalo que pode ter (ou só no do quadro, sem intervalo). */
+P.createTweenInRange = function (type) {
+  const label = TWEEN_LABEL[type];
+  const cmds = [];
+  let skipped = 0;
+  for (const { layer, span, next } of this.rangeSpans()) {
+    if (span.tween) continue;
+    const isCam = layer.type === 'camera';
+    let tween = null;
+    if (type === 'classic' && next && (span.elements.length || isCam)) tween = { ...DEFAULT_TWEEN };
+    if (type === 'shape' && next && !isCam && span.elements.length && span.elements.every((e) => e.type === 'shape')) tween = { type: 'shape', ease: 0, hints: [] };
+    if (type === 'motion' && !isCam && span.elements.length === 1 && span.duration > 1) tween = { type: 'motion', props: {}, ease: 0, orient: false };
+    if (!tween) {
+      skipped++;
+      continue;
+    }
+    cmds.push(new C.SetSpanProps(layer.id, span.start, { tween: undefined }, { tween }, label));
+  }
+  if (cmds.length) this.run(new C.Compound(label, cmds));
+  if (!cmds.length) this.toast('Nenhum trecho do intervalo pode ter esse tween: falta keyframe de destino ou conteúdo.');
+  else if (skipped) this.toast(`Tween criado em ${cmds.length} ${cmds.length === 1 ? 'trecho' : 'trechos'}; ${skipped} ficaram sem (sem destino ou sem conteúdo).`);
+};
+
+P.removeTweenInRange = function () {
+  const cmds = this.rangeSpans()
+    .filter((x) => x.span.tween)
+    .map(({ layer, span }) => new C.SetSpanProps(layer.id, span.start, { tween: span.tween }, { tween: undefined }, 'Remover tween'));
+  if (cmds.length) this.run(new C.Compound('Remover tween', cmds));
+};
+
+const baseClassic = P.createClassicTween;
+P.createClassicTween = function () {
+  if (this.hasFrameRange()) return this.createTweenInRange('classic');
+  return baseClassic.call(this);
+};
+const baseShape = P.createShapeTween;
+P.createShapeTween = function () {
+  if (this.hasFrameRange()) return this.createTweenInRange('shape');
+  return baseShape.call(this);
+};
+const baseMotion = P.createMotionTween;
+P.createMotionTween = function () {
+  if (this.hasFrameRange()) return this.createTweenInRange('motion');
+  return baseMotion.call(this);
+};
+const baseRemove = P.removeTween;
+P.removeTween = function () {
+  if (this.hasFrameRange()) return this.removeTweenInRange();
+  return baseRemove.call(this);
+};
+
+/** Ctrl+T: liga o tween clássico onde não tem; se tudo já tem, tira. */
+P.toggleClassicTween = function () {
+  const spans = this.rangeSpans();
+  if (spans.length && spans.every((x) => x.span.tween || !x.next)) {
+    if (spans.some((x) => x.span.tween)) return this.removeTween();
+  }
+  return this.createClassicTween();
+};
+
+// ---------- arrastar na timeline ----------
+
+/** Arrasta o keyframe que começa em `start` (camada `layerId`) para `to`. */
+P.moveKeyframeTo = function (layerId, start, to) {
+  const layer = this.layer(layerId);
+  if (!layer) return;
+  const r = TL.moveKeyframe(layer.frames, start, to);
+  if (!r) return;
+  this.stop();
+  this.run(new C.SetLayerFrames(layer.id, layer.frames, r.frames, 'Mover keyframe', this.frame, r.frame));
+};
+
+/** Arrasta o intervalo selecionado `delta` quadros (copy: Alt, deixa os originais). */
+P.moveFrameRange = function (delta, copy = false) {
+  const r = this.frameRange();
+  const label = copy ? 'Copiar quadros arrastando' : 'Mover quadros';
+  const cmds = [];
+  let dest = r.from;
+  for (const layer of this.rangeLayers(r)) {
+    const res = TL.moveRange(layer.frames, r.from, r.to, delta, { copy });
+    if (!res) continue;
+    dest = res.frame;
+    cmds.push(new C.SetLayerFrames(layer.id, layer.frames, res.frames, label, this.frame, res.frame));
+  }
+  if (!cmds.length) return;
+  this.stop();
+  this.run(new C.Compound(label, cmds));
+  this.setFrameSelection({ from: dest, to: dest + (r.to - r.from), layerIds: r.layerIds });
+};
+
+// ---------- faixa de reprodução ----------
+// Só no editor (não vai para o arquivo): reproduzir e repetir apenas um trecho, como um ciclo.
+
+P.setPlayRange = function (range) {
+  if (range) {
+    const from = Math.max(0, Math.min(range.from, range.to));
+    const to = Math.max(from, Math.max(range.from, range.to));
+    this.playRange = { from, to };
+  } else this.playRange = null;
+  this.emit('options');
+};
+
+/** Faixa usada para tocar: a escolhida (cortada no fim da cena) ou a cena toda. */
+P.playBounds = function () {
+  const len = this.length;
+  const r = this.playRange;
+  if (!r || r.from >= len) return { from: 0, to: len - 1 };
+  return { from: r.from, to: Math.min(r.to, len - 1) };
 };
 
 // ---------- distribuir ----------
