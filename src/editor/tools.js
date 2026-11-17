@@ -269,9 +269,13 @@ function selectTool(stage, editor) {
         const fr = stage.selectionFrame();
         const h = fr && stage.hitHandle(fr, e.sx, e.sy);
         stage.hoverHandle = h?.handle?.id || (h?.type === 'rotate' ? 'rotate' : null);
-        if (h) stage.setCursor(h.cursor);
-        else {
+        stage.statusHint = null;
+        if (h) {
+          stage.setCursor(h.cursor);
+          stage.statusHint = h.type === 'rotate' ? [['Arraste', 'gira'], ['Shift', 'passos de 15°']] : [['Arraste', 'escala'], ['Shift', 'mantém a proporção'], ['Alt', 'a partir do centro']];
+        } else {
           const hit = stage.hitTest(e.wx, e.wy);
+          if (hit) stage.statusHint = [['Arraste', 'move'], ['Shift+arraste', 'só na horizontal ou vertical'], ['Ctrl', 'sem encaixe'], ['Shift+clique', 'soma'], ['Alt+clique', 'tira'], ['Duplo clique', hit.el.type === 'instance' ? 'entra no símbolo' : 'edita os pontos']];
           // a peça sob o mouse ganha um contorno: dá para ver o que o clique vai pegar
           if (hit && !editor.selection.has(hit.el.id)) hoverId = hit.el.id;
           stage.setCursor(hit || (fr && stage.insideSelection(fr, e.sx, e.sy)) ? 'move' : 'default');

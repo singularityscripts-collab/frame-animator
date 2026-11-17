@@ -24,4 +24,13 @@ contextBridge.exposeInMainWorld('api', {
   setKeys: (map) => ipcRenderer.send('keys:set', map),
   onMenuAction: (fn) => ipcRenderer.on('menu:action', (_e, id) => fn(id)),
   onCloseRequested: (fn) => ipcRenderer.on('app:close-requested', () => fn()),
+  version: () => ipcRenderer.invoke('app:version'),
+  openUrl: (url) => ipcRenderer.send('shell:open-url', url),
+  update: {
+    check: () => ipcRenderer.invoke('update:check'),
+    download: () => ipcRenderer.invoke('update:download'),
+    cancel: () => ipcRenderer.invoke('update:cancel'),
+    install: () => ipcRenderer.invoke('update:install'),
+    onProgress: (fn) => ipcRenderer.on('update:progress', (_e, p) => fn(p)),
+  },
 });

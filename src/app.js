@@ -19,6 +19,8 @@ import { icons } from './editor/icons.js';
 import { esc } from './editor/ui-kit.js';
 import { createActions } from './editor/actions.js';
 import { createIO } from './editor/io.js';
+import { installUpdates } from './editor/update-ui.js';
+import { installStatusBar, installStageMenu, openShortcutSheet, enableNumberScrub, installToolCursors } from './editor/ui-help.js';
 
 const editor = new Editor();
 const io = createIO(editor);
@@ -41,6 +43,12 @@ const library = new LibraryUI(editor, actions, document.getElementById('library-
 const history = new HistoryUI(editor, document.getElementById('history-page'));
 const colors = new ColorUI(editor, document.getElementById('colors-page'));
 new TimelineUI(editor, actions);
+installStatusBar(editor, stage);
+installStageMenu(editor, stage, actions);
+enableNumberScrub(editor);
+installToolCursors(editor, stage);
+actions.defs.shortcutSheet = { keys: [], run: () => openShortcutSheet(actions) };
+installUpdates({ editor, actions, io });
 
 const actionsPage = page('actions'), alignPage = page('align'), scenesPage = page('scenes'), compPage = page('components'), scriptsPage = page('scripts');
 const actionsPanel = new ActionsPanel(editor, actions, actionsPage);
@@ -69,6 +77,12 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     stage.setSpace(true);
     return;
+  }
+  // ? ou F1: folha de atalhos
+  const typing = /INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || e.target.isContentEditable;
+  if (!typing && !document.querySelector('dialog[open]') && (e.key === '?' || e.key === 'F1')) {
+    e.preventDefault();
+    return openShortcutSheet(actions);
   }
   actions.handleKey(e);
 });
@@ -184,7 +198,8 @@ editor.on('toast', (msg) => {
   toastEl.textContent = msg;
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1800);
+  // tempo para ler: mensagens longas ficam mais tempo na tela
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), Math.min(7000, 1800 + String(msg).length * 45));
 });
 
 // ---------- título da janela ----------

@@ -48,7 +48,7 @@ function imageSize(mime, data) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve({ w: img.naturalWidth || 1, h: img.naturalHeight || 1, img });
-    img.onerror = () => reject(new Error('Imagem inválida ou formato não suportado.'));
+    img.onerror = () => reject(new Error('Imagem inválida ou formato não suportado (use PNG, JPG, GIF, WEBP ou SVG)'));
     img.src = `data:${mime};base64,${data}`;
   });
 }
@@ -104,10 +104,13 @@ export const ACTION_LABELS = {
   showActions: 'Painel Ações', showAlign: 'Painel Alinhar', showSceneExplorer: 'Explorador de cenas', showComponents: 'Painel Componentes', showProps: 'Painel Propriedades',
   saveLayout: 'Salvar layout', manageLayouts: 'Layouts salvos', resetLayout: 'Layout padrão', removeArmature: 'Tirar esqueleto', clearWidth: 'Tirar perfil de largura',
   clearWarp: 'Tirar pinos', unbindBone: 'Soltar do osso', reset3D: 'Zerar 3D', pickVideo: 'Escolher vídeo',
+  shortcutSheet: 'Folha de atalhos', checkUpdates: 'Procurar atualizações', about: 'Sobre o Frame Animator',
 };
 for (const t of ALL_TOOLS) ACTION_LABELS[`tool${t.id[0].toUpperCase()}${t.id.slice(1)}`] = `Ferramenta: ${t.label}`;
 
 export function extendActions(actions, { editor: ed, stage, io, panels }) {
+  // nome da ação nas mensagens de erro
+  ed.actionLabel = (id) => ACTION_LABELS[id];
   const { defs } = actions;
   const add = (id, keys, run) => (defs[id] = { keys, run });
 

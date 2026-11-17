@@ -25,7 +25,7 @@ export function createIO(editor) {
       try {
         res = await api.saveFile({ path: as ? null : editor.filePath, data, defaultName: `${editor.fileName}.fanim` });
       } catch (err) {
-        editor.toast(`Não foi possível salvar: ${cleanError(err)}`);
+        editor.toast(`Não deu para salvar: ${cleanError(err)} Tente Salvar como (Ctrl+Shift+S) em outra pasta.`);
         return false;
       }
       if (!res) return false;
@@ -48,7 +48,7 @@ export function createIO(editor) {
       editor.load(parseDocument(text), path);
       editor.toast(`Aberto: ${editor.fileName}`);
     } catch (err) {
-      editor.toast(`Não foi possível abrir: ${err.message}`);
+      editor.toast(`Não deu para abrir: ${err.message}`);
     }
   }
 
@@ -59,7 +59,7 @@ export function createIO(editor) {
       try {
         res = await api.openFile();
       } catch (err) {
-        editor.toast(`Não foi possível abrir: ${cleanError(err)}`);
+        editor.toast(`Não deu para abrir: ${cleanError(err)}`);
         return;
       }
       if (res) loadText(res.data, res.path);
@@ -92,7 +92,7 @@ export function createIO(editor) {
     try {
       localStorage.setItem('fa-preview', data);
     } catch {
-      editor.toast('Não foi possível abrir o teste.');
+      editor.toast('Não deu para abrir o teste: o navegador bloqueou o armazenamento. No app instalado isso não acontece.');
       return;
     }
     window.open('preview.html', 'fa-preview', 'width=960,height=600');
@@ -101,6 +101,17 @@ export function createIO(editor) {
   return { save, open, newDoc, requestClose, testScene, confirmDiscard };
 }
 
+/** Mensagem do sistema em português claro (códigos de erro de arquivo viram explicação). */
 function cleanError(err) {
-  return String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+  const msg = String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+  const known = {
+    ENOENT: 'o arquivo ou a pasta não existe mais.',
+    EACCES: 'sem permissão para usar este arquivo ou pasta.',
+    EPERM: 'o Windows não deixou mexer neste arquivo (pode estar só para leitura ou protegido).',
+    EBUSY: 'o arquivo está aberto em outro programa. Feche o outro programa e tente de novo.',
+    ENOSPC: 'o disco está cheio. Libere espaço e tente de novo.',
+    EROFS: 'o disco é só para leitura.',
+  };
+  const code = Object.keys(known).find((c) => msg.includes(c));
+  return code ? known[code] : /[.!?]$/.test(msg.trim()) ? msg.trim() : `${msg.trim()}.`;
 }

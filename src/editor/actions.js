@@ -163,7 +163,7 @@ export function createActions({ editor, stage, io, ui = {} }) {
       duration = buf.duration;
       actx.close?.();
     } catch {
-      return ed.toast('Não foi possível ler esse arquivo de áudio.');
+      return ed.toast('Não deu para ler esse áudio. Use um arquivo MP3, WAV, OGG ou M4A que toque em outros programas.');
     }
     const snd = ed.importSound({ name: file.name.replace(/\.[^.]+$/, ''), mime: file.mime, data: file.data, duration });
     ui.showTab?.('library');
@@ -337,11 +337,16 @@ export function createActions({ editor, stage, io, ui = {} }) {
     if (!d) return console.warn('Ação desconhecida:', id);
     try {
       const r = d.run();
-      if (r?.catch) r.catch((err) => ed.toast(`Erro: ${err.message}`));
+      if (r?.catch) r.catch((err) => failed(id, err));
     } catch (err) {
-      console.error(err);
-      ed.toast(`Erro: ${err.message}`);
+      failed(id, err);
     }
+  }
+  /** Erro numa ação: diz qual ação, o motivo e o que fazer (desfazer, se algo mudou). */
+  function failed(id, err) {
+    console.error(err);
+    const name = ed.actionLabel?.(id) || id;
+    ed.toast(`Não deu para fazer "${name}": ${err?.message || err}. Se algo mudou, Ctrl+Z desfaz.`);
   }
 
   function comboOf(e) {

@@ -168,7 +168,7 @@ export function brushTool(stage, editor) {
         res = V.fromPaper(V.cleanOutline(V.strokeOutline(raw), 0.1 / stage.scale));
       } catch (err) {
         console.error(err);
-        return editor.toast('Não foi possível criar o traço do pincel.');
+        return editor.toast('Não deu para criar este traço. Tente um traço um pouco mais longo ou com o pincel maior.');
       }
       if (!res) return;
       const s = editor.style;
@@ -270,7 +270,7 @@ export function eraserTool(stage, editor) {
         if (r?.skippedRig) editor.toast('Partes que dobram com os ossos só podem ser apagadas num quadro com a pose zerada.');
       } catch (err) {
         console.error(err);
-        editor.toast('Não foi possível apagar aqui.');
+        editor.toast('Não deu para apagar aqui. Tente com a borracha maior ou numa forma de cada vez.');
       }
     },
     cancel() {

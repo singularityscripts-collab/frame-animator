@@ -201,7 +201,7 @@ function normalizeDocument(text) {
   }
   if (!isObj(d) || d.format !== FORMAT) throw new Error('Este arquivo não é um documento do Frame Animator.');
   if (typeof d.version !== 'number' || d.version > VERSION) {
-    throw new Error('Este arquivo foi salvo numa versão mais nova do Frame Animator.');
+    throw new Error('Este arquivo foi salvo numa versão mais nova do Frame Animator. Atualize o app (Ajuda › Procurar atualizações) e abra de novo.');
   }
   const num = (v, def, min, max) => (Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : def);
   d.width = num(d.width, 1280, 1, 16000);

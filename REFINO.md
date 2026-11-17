@@ -20,8 +20,8 @@ Objetivo: deixar as funções que já existem fáceis, previsíveis e gostosas d
 | 0 | Auditoria | **pronta** |
 | 1 | Rigging | **pronta** |
 | 2 | Desenho e seleção | **pronta** |
-| 3 | Timeline e animação | **pronta** (esperando "próxima etapa") |
-| 4 | Interface e atalhos | pendente |
+| 3 | Timeline e animação | **pronta** |
+| 4 | Interface e atalhos (+ atualização automática e instalador novo) | **pronta** (esperando "próxima etapa") |
 | 5 | Desempenho e estabilidade | pendente |
 | 6 | Polimento visual | pendente |
 
@@ -317,7 +317,81 @@ Todos os itens R1–R12 abaixo foram resolvidos. Arquivos novos:
 
 ---
 
-## Etapa 4: Interface e atalhos
+## Etapa 4: Interface e atalhos (pronta)
+
+### O que foi feito
+
+- **Menu de clique direito no palco (I1)**
+  - Sobre uma peça: editar símbolo ou pontos, recortar, copiar, colar, duplicar, apagar, converter em símbolo, separar, distribuir, ordem, motion tween e soltar do osso.
+  - No vazio: colar, colar no lugar, selecionar tudo, zoom, réguas, grade, guias e propriedades do documento.
+  - Cada item mostra o atalho.
+- **Barra de status (I2)**
+  - Embaixo do palco: o nome e o atalho da ferramenta, e o que cada ação e modificador faz.
+  - Muda conforme o que está sob o mouse: sobre uma alça, "Arraste escala · Shift mantém a proporção · Alt a partir do centro"; sobre uma peça, as opções de mover e selecionar.
+  - Mostra o modo dos ossos (Editar rig / Posar).
+  - À direita: posição do cursor, quantos objetos estão selecionados e o zoom.
+- **Folha de atalhos (I3)**
+  - Tecla **?** ou **F1**, ou Ajuda › Atalhos de teclado.
+  - Todos os atalhos (inclusive os personalizados) em grupos, com busca, mais os gestos de mouse (Espaço, Ctrl+roda, Shift+clique, Alt+arraste).
+  - O botão "Personalizar…" abre o editor de atalhos.
+- **Scrub nos campos numéricos (I4)**
+  - Arrastar o nome de qualquer campo numérico (X, Y, L, A, rotação, limites dos ossos…) muda o valor ao vivo.
+  - Shift multiplica por 10, Alt divide por 10.
+  - O arraste inteiro é um passo só de desfazer.
+- **Cursores (I5):** cursores próprios para balde, conta-gotas, caneta e lápis. Os ossos já tinham cursor por estado desde a Etapa 1.
+- **Dicas (I6):** conferido que nenhum botão de ícone ficou sem dica.
+- **Mensagens de erro**
+  - Toda falha de ação diz qual ação falhou, o motivo e que Ctrl+Z desfaz.
+  - Erros de arquivo viram explicação (arquivo em uso, disco cheio, sem permissão) com o que fazer.
+  - Os avisos longos ficam mais tempo na tela.
+
+### Pedido junto com esta etapa: atualização automática e instalador novo
+
+- **Atualização automática pelo GitHub**
+  - Ao abrir o app (no máximo a cada 6 horas) ou em Ajuda › Procurar atualizações, o app consulta a última release.
+  - Um cartão animado no canto do palco mostra a versão e as novidades e oferece "Atualizar agora".
+  - O download tem barra de progresso e pode ser cancelado, e o SHA-256 é conferido; sem conferência, não instala.
+  - "Instalar e reiniciar" pergunta antes se há alterações não salvas.
+  - Dá para pular uma versão ou desligar a procura automática.
+  - Só aceita downloads https do GitHub.
+- **Instalador novo, no lugar do NSIS**
+  - Janela escura com cantos arredondados e manchas de luz que flutuam.
+  - No topo, uma bola quicando com onion skin, como no exercício clássico.
+  - Troca de telas com deslize, botões que reagem ao mouse e ao clique, barra de progresso com brilho e marca de "pronto" que se desenha.
+  - Instala para o usuário, sem pedir administrador, em cerca de 8 segundos, com atalhos e entrada em "Aplicativos instalados".
+  - Remove o 0.1.x antigo.
+  - Troca os arquivos de uma vez, com volta atrás se algo falhar.
+  - Avisa se o app estiver aberto ou se faltar espaço no disco.
+- **Desinstalador:** mesmo visual, com a opção de apagar as configurações. As animações nunca são apagadas.
+- **Ícone novo do app:** bola com onion skin em degradê azul-violeta.
+- **Tamanho:** o app empacotado leva só os idiomas pt-BR e en-US, e o instalador ficou com 169,6 MB.
+
+### Como testar
+
+1. Passe o mouse no palco e veja a barra de status embaixo.
+2. Clique direito numa peça e no vazio.
+3. Aperte **?**.
+4. Selecione uma peça e arraste a palavra "X" no painel Propriedades para os lados.
+5. Instale com `dist/Frame-Animator-Setup-0.2.0.exe`.
+6. Em Ajuda › Procurar atualizações, deve aparecer "Você está na versão mais nova".
+
+### Testado
+
+- 101 testes passando (3 novos: nomes das ações, comparação de versões e endereços aceitos no download).
+- `npm run check` ok.
+- No app instalado:
+  - instalação silenciosa (arquivos, atalhos e registro conferidos);
+  - teste completo de fumaça;
+  - atualização simulada: esperou o processo fechar, trocou a pasta e não deixou sobra;
+  - desinstalação: pasta, atalhos e registro removidos, configurações mantidas, sem cópia temporária sobrando.
+- Telas do instalador e do desinstalador conferidas por imagem.
+
+### Pendências da etapa
+
+- **Assinatura digital:** o instalador não tem assinatura, então o Windows SmartScreen ainda avisa "editor desconhecido" no primeiro download.
+- **Primeira atualização real:** a atualização só funciona de verdade a partir da release 0.2.0 publicada. Quem tem o 0.1.0 instala o 0.2.0 pela página da release, uma vez só, porque o 0.1.0 não tinha atualizador.
+
+### Problemas da auditoria (todos resolvidos)
 
 | # | Imp. | Problema |
 |---|---|---|
@@ -365,4 +439,7 @@ Todos os itens R1–R12 abaixo foram resolvidos. Arquivos novos:
 - **Etapa 3:** Shift+clique e menu agindo no intervalo; arrastar keyframes e quadros (Alt copia); colar substituindo; Ctrl+T e easing com um clique; alças do onion skin na régua; zoom da timeline; faixa de reprodução.
   - 98 testes passando (6 novos em `test/timeline.test.js`), `npm run check` ok e `npm run smoke` (Electron) ok.
   - Testado com mouse no app: bola com 3 keyframes, tween no intervalo, faixa 1–12 em loop, keyframe arrastado e cópia por arraste.
-  - Ainda sem commit.
+  - Commit 81d1b78, enviado ao GitHub.
+- **Etapa 4:** menu do palco, barra de status, folha de atalhos (?), scrub nos campos, cursores e mensagens de erro claras.
+  - Mais, a pedido: atualização automática pelo GitHub, instalador e desinstalador novos com animações e ícone novo. Versão 0.2.0.
+  - 101 testes passando, instalação, atualização e desinstalação testadas no Windows.

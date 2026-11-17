@@ -8,6 +8,7 @@ const { once } = require('node:events');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const { html5Files } = require('./bundler.cjs');
+const updater = require('./updater.cjs');
 
 // ffmpeg embutido (no app empacotado ele fica fora do .asar)
 const FFMPEG = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
@@ -565,6 +566,15 @@ function buildMenu() {
       ],
     },
     {
+      label: 'Aj&uda',
+      submenu: [
+        item('Atalhos de teclado', 'shortcutSheet', 'F1'),
+        { type: 'separator' },
+        item('Procurar atualizações…', 'checkUpdates'),
+        item(`Sobre o Frame Animator (versão ${app.getVersion()})`, 'about'),
+      ],
+    },
+    {
       label: 'Desenvol&vedor',
       submenu: [
         { label: 'Recarregar', role: 'forceReload', accelerator: 'CmdOrCtrl+R' },
@@ -625,6 +635,22 @@ ipcMain.on('app:close-confirmed', () => {
 });
 
 ipcMain.on('app:ready', () => (rendererReady = true));
+
+// ---------- atualização (GitHub Releases) ----------
+const updateError = (err) => {
+  throw new Error(String(err?.message || err).replace(/^Error: /, ''));
+};
+ipcMain.handle('update:check', () => updater.check().catch(updateError));
+ipcMain.handle('update:download', (e) => updater.download((p) => e.sender.send('update:progress', p)).catch(updateError));
+ipcMain.handle('update:cancel', () => updater.cancel());
+ipcMain.handle('update:install', () => {
+  closeConfirmed = true; // a interface já perguntou sobre salvar antes de chamar
+  updater.install();
+});
+ipcMain.handle('app:version', () => app.getVersion());
+ipcMain.on('shell:open-url', (_e, url) => {
+  if (typeof url === 'string' && /^https:\/\/github\.com\//.test(url)) shell.openExternal(url);
+});
 
 ipcMain.on('app:set-title', (_e, title) => {
   if (typeof title === 'string') win?.setTitle(title);
