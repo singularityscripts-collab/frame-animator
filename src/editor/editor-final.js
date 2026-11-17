@@ -8,7 +8,7 @@ import { clone, uid, uniqueName, cloneElementsWithNewIds } from '../model/docume
 import { makeShape, rectPath, unionBounds, pathBounds, localBoxCorners, pointsBounds, elementLocalBounds } from '../model/geometry.js';
 import * as V from '../model/vector-ops.js';
 import { layerFrame, symbolById, instanceFrame, multiply, translation, invert, IDENTITY, applyPoint } from '../player/render.js';
-import { solveBones } from '../player/bones.js';
+import './rig.js';
 import { measureText, textLines, lineHeight } from '../player/assets.js';
 import { clearBitmapCache } from '../player/effects.js';
 
@@ -355,88 +355,7 @@ P.setSpanScript = function (code) {
   });
 };
 
-// ---------- ossos ----------
-/** Esqueleto do keyframe atual da camada (cria se ainda não houver). */
-P.armatureSpan = function (layer = this.activeLayer) {
-  return this.spanAt(layer);
-};
-
-/**
- * Cria um osso de head até tail (espaço da camada). parentId: osso pai (cabeça na ponta dele).
- * bindId: elemento que passa a seguir o osso.
- */
-P.addBone = function (head, tail, parentId, bindId) {
-  const layer = this.activeLayer;
-  const span = this.spanAt(layer);
-  if (!span) return;
-  const arm = clone(span.armature || { bones: [], pose: {} });
-  const bone = { id: uid('o'), parentId: parentId || null, x: head.x, y: head.y, angle: Math.atan2(tail.y - head.y, tail.x - head.x), length: Math.max(4, Math.hypot(tail.x - head.x, tail.y - head.y)) };
-  if (parentId) {
-    // osso filho: cabeça na ponta (em descanso) do pai, com a pose atual zerada para não pular
-    const s = solveBones(arm, {}).get(parentId);
-    if (s) {
-      bone.x = s.restTail.x;
-      bone.y = s.restTail.y;
-      bone.angle = Math.atan2(tail.y - s.restTail.y, tail.x - s.restTail.x);
-      bone.length = Math.max(4, Math.hypot(tail.x - s.restTail.x, tail.y - s.restTail.y));
-    }
-  }
-  arm.bones.push(bone);
-  // forma: ganha "pele" (dobra seguindo todos os ossos); símbolo/imagem: acompanha só este osso
-  const elements = span.elements.map((e) => {
-    if (e.id !== bindId) return e;
-    if (e.type === 'shape') {
-      const { bone: _old, ...rest } = e;
-      return { ...rest, skin: true };
-    }
-    return { ...e, bone: bone.id };
-  });
-  this.group('Osso', () => {
-    this.run(new C.SetSpanElements(layer.id, span.start, span.elements, elements, 'Osso'));
-    this.run(new C.SetSpanProps(layer.id, span.start, { armature: span.armature }, { armature: arm }, 'Osso'));
-  });
-  return bone;
-};
-
-/** Garante keyframe de pose no quadro atual (a pose interpolada vira a pose do keyframe). */
-P.poseKeyframeHere = function (layer = this.activeLayer) {
-  const span = this.spanAt(layer);
-  if (!span?.armature) return span;
-  if (span.start !== this.frame) {
-    const r = TL.insertKeyframe(layer.frames, this.frame);
-    if (r) {
-      const ns = r.frames.find((s) => s.start === this.frame);
-      if (ns && span.armature) {
-        // o keyframe novo guarda a pose do quadro (sem repetir a pose nas matrizes dos elementos)
-        ns.armature = clone(span.armature);
-        const next = layer.frames[layer.frames.indexOf(span) + 1];
-        if (span.tween && next?.armature) {
-          const t = (this.frame - span.start) / span.duration;
-          const a = span.armature.pose || {}, b = next.armature.pose || {};
-          ns.armature.pose = Object.fromEntries([...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => k !== '__root').map((k) => [k, (a[k] || 0) + ((b[k] || 0) - (a[k] || 0)) * t]));
-        }
-        ns.elements = span.elements.map((e) => ({ ...clone(e), id: uid('e') }));
-      }
-      this.run(new C.SetLayerFrames(layer.id, layer.frames, r.frames, 'Keyframe de pose', this.frame, this.frame));
-    }
-  }
-  return this.spanAt(layer);
-};
-
-P.removeArmature = function () {
-  const layer = this.activeLayer;
-  const span = this.spanAt(layer);
-  if (!span?.armature) return;
-  const els = span.elements.map((e) => {
-    const c = { ...e };
-    delete c.bone;
-    return c;
-  });
-  this.group('Tirar ossos', () => {
-    this.run(new C.SetSpanElements(layer.id, span.start, span.elements, els, 'Tirar ossos'));
-    this.run(new C.SetSpanProps(layer.id, span.start, { armature: span.armature }, { armature: undefined }, 'Tirar ossos'));
-  });
-};
+// ---------- ossos: ver rig.js ----------
 
 // ---------- 9 fatias ----------
 P.setScale9 = function (symbolId, grid) {

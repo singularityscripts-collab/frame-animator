@@ -1547,3 +1547,193 @@ input {
 .ly-row span {
   flex: 1;
 }
+
+/* ---------- Ossos: faixa de modo no palco e painel Esqueleto ---------- */
+.rig-badge {
+  --rig-mode: #ff9f0a;
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(28, 28, 32, 0.92);
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--rig-mode);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  z-index: 5;
+  font-size: 12px;
+}
+.rig-badge[data-mode='pose'] {
+  --rig-mode: #0a84ff;
+}
+.rig-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rig-seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.rig-seg.wide {
+  display: flex;
+}
+.rig-seg button {
+  flex: 1;
+  border: 0;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  padding: 4px 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rig-seg button + button {
+  border-left: 1px solid var(--line);
+}
+.rig-seg button:hover {
+  color: var(--text);
+}
+.rig-seg button.on[data-rig='edit'],
+.rig-seg button.on[data-mode='edit'] {
+  background: #ff9f0a;
+  color: #1c1c20;
+}
+.rig-seg button.on[data-rig='pose'],
+.rig-seg button.on[data-mode='pose'] {
+  background: #0a84ff;
+  color: #fff;
+}
+.rig-key {
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 0 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.rig-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.rig-chip:hover {
+  color: var(--text);
+  border-color: #50505a;
+}
+.rig-chip .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #5a5a64;
+}
+.rig-chip.rec {
+  color: #ff6961;
+  border-color: rgba(255, 69, 58, 0.6);
+}
+.rig-chip.rec .dot {
+  background: #ff453a;
+  box-shadow: 0 0 0 3px rgba(255, 69, 58, 0.25);
+}
+.rig-hint {
+  margin-top: 5px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.rig-panel .field.wide {
+  margin: 4px 0;
+}
+.rig-h {
+  margin: 10px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.bone-tree {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.bone-tree li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.bone-tree li:hover {
+  background: var(--panel-2);
+}
+.bone-tree li.on {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.bone-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+.bone-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bone-tag {
+  color: var(--text-dim);
+}
+.bone-pin {
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.bone-pin:hover {
+  border-color: var(--line);
+  color: var(--text);
+}
+.bone-pin.on {
+  color: #ff6961;
+  border-color: rgba(255, 69, 58, 0.5);
+}
+.rig-sel {
+  margin: 0 0 8px;
+  padding: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+}
+.rig-sel .btn-flat.full {
+  margin-top: 6px;
+}
+.btn-flat.danger-hover:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.btn-flat:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

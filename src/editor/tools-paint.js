@@ -26,27 +26,47 @@ export function solidOf(fill) {
   return isGradient(fill) ? fill.stops?.[0]?.color || '#000000' : fill;
 }
 
-function pressureOf(e, usePressure) {
-  if (!usePressure || e.pointerType === 'mouse' || !e.pressure) return 1;
-  return 0.15 + 0.85 * e.pressure;
+/**
+ * Pressão da caneta → fator da largura (0,12 a 1).
+ * Mouse e toque: largura cheia. Caneta com pressão 0 (o toque inicial de muitas mesas
+ * digitalizadoras): null = ainda desconhecida; o traço usa a primeira pressão que chegar.
+ * A curva (expoente 0,7) deixa o traço leve mais fácil de controlar.
+ */
+export function pressureOf(e, usePressure) {
+  if (!usePressure || e.pointerType !== 'pen') return 1;
+  if (!(e.pressure > 0)) return null;
+  return 0.12 + 0.88 * Math.pow(Math.min(1, e.pressure), 0.7);
 }
 
-/** Média móvel nos pontos do traço (suavização), mantendo as pontas. */
-function smoothPoints(pts, amount) {
-  const k = Math.round((amount / 100) * 6);
-  if (k < 1 || pts.length < 3) return pts;
-  return pts.map((p, i) => {
-    if (i === 0 || i === pts.length - 1) return p;
-    let sx = 0, sy = 0, sw = 0, n = 0;
-    for (let j = Math.max(0, i - k); j <= Math.min(pts.length - 1, i + k); j++) {
-      sx += pts[j].x;
-      sy += pts[j].y;
-      sw += pts[j].w;
-      n++;
-    }
-    return { x: sx / n, y: sy / n, w: sw / n };
-  });
+/**
+ * Estabilizador "corda": o ponto que desenha só anda quando o cursor se afasta mais que o
+ * comprimento da corda, puxado na direção dele. Tira a tremedeira da mão sem atrasar o traço
+ * no tempo, e o que aparece ao vivo é exatamente o traço final (nada muda ao soltar).
+ * rope: comprimento em unidades do desenho (0 = sem estabilizar).
+ */
+export function ropeStabilizer(rope) {
+  let cur = null;
+  return {
+    get point() {
+      return cur;
+    },
+    push(x, y) {
+      if (!cur) {
+        cur = { x, y };
+        return cur;
+      }
+      const dx = x - cur.x, dy = y - cur.y;
+      const d = Math.hypot(dx, dy);
+      if (d <= rope) return null;
+      const k = (d - rope) / d;
+      cur = { x: cur.x + dx * k, y: cur.y + dy * k };
+      return cur;
+    },
+  };
 }
+
+/** Comprimento da corda (unidades do desenho) para a suavização de 0 a 100 (até ~22 px na tela). */
+export const ropeLength = (smoothing, scale) => ((Math.max(0, Math.min(100, smoothing)) / 100) * 22) / (scale || 1);
 
 function drawTrail(ctx, pts, color) {
   ctx.save();
@@ -87,29 +107,62 @@ function drawRing(ctx, stage, radiusPx) {
 // ---------- Pincel ----------
 export function brushTool(stage, editor) {
   let pts = null;
+  let rope = null;
+  let lastW = 1;
+  let pending = 0; // pontos do começo ainda sem pressão conhecida
   const opts = () => editor.toolOptions.brush;
+  const addPoint = (p, w) => {
+    const last = pts[pts.length - 1];
+    if (last && Math.hypot(p.x - last.x, p.y - last.y) * stage.scale < 1) {
+      if (w != null) last.w = Math.max(last.w ?? 0, w);
+      return;
+    }
+    pts.push({ x: p.x, y: p.y, w });
+  };
+  /** Largura do ponto: pressão suavizada (sem degraus); antes da 1ª pressão, guarda para preencher depois. */
+  const widthAt = (e) => {
+    const pr = pressureOf(e, opts().pressure);
+    if (pr == null) {
+      pending++;
+      return null;
+    }
+    const w = opts().size * pr;
+    lastW = pts.length - pending > 0 ? lastW + (w - lastW) * 0.45 : w;
+    if (pending) {
+      for (const q of pts) if (q.w == null) q.w = lastW;
+      pending = 0;
+    }
+    return lastW;
+  };
   return {
     cursor: 'crosshair',
     coalesced: true,
     down(e) {
-      pts = [{ x: e.wx, y: e.wy, w: opts().size * pressureOf(e, opts().pressure) }];
+      // Alt+clique: pega a cor do que está embaixo (conta-gotas rápido)
+      if (e.alt) return pickColor(stage, editor, e, 'fill');
+      pts = [];
+      pending = 0;
+      rope = ropeStabilizer(ropeLength(opts().smoothing, stage.scale));
+      const w = widthAt(e);
+      const p = rope.push(e.wx, e.wy);
+      pts.push({ x: p.x, y: p.y, w });
+      // o palco fica parado durante o traço: só o rastro é redesenhado (traço sem atraso)
+      stage.render();
+      stage.freeze();
     },
     move(e) {
       if (!pts) return;
-      const last = pts[pts.length - 1];
-      const w = opts().size * pressureOf(e, opts().pressure);
-      if (Math.hypot(e.wx - last.x, e.wy - last.y) * stage.scale < 1) {
-        last.w = Math.max(last.w, w);
-        return;
-      }
-      pts.push({ x: e.wx, y: e.wy, w });
+      const w = widthAt(e);
+      const p = rope.push(e.wx, e.wy);
+      if (p) addPoint(p, w ?? null);
       stage.invalidate();
     },
     up() {
       if (!pts) return;
-      const raw = smoothPoints(pts, opts().smoothing);
+      // pressão nunca conhecida (caneta sem pressão): largura cheia
+      const raw = pts.map((q) => ({ ...q, w: q.w ?? opts().size }));
       pts = null;
-      stage.invalidate();
+      stage.unfreeze();
       let res;
       try {
         res = V.fromPaper(V.cleanOutline(V.strokeOutline(raw), 0.1 / stage.scale));
@@ -123,18 +176,67 @@ export function brushTool(stage, editor) {
     },
     cancel() {
       pts = null;
+      stage.unfreeze();
     },
     hover() {
       stage.setCursor('crosshair');
       stage.invalidate();
     },
     drawWorld(ctx) {
-      if (pts) drawTrail(ctx, pts, solidOf(editor.style.fill));
+      if (pts) drawTrail(ctx, pts.map((q) => ({ ...q, w: q.w ?? opts().size })), solidOf(editor.style.fill));
     },
     drawScreen(ctx) {
+      if (pts) return drawRope(ctx, stage, rope?.point);
       drawRing(ctx, stage, (opts().size / 2) * stage.scale);
     },
   };
+}
+
+/** Corda do estabilizador: linha fina do cursor até o ponto que está desenhando. */
+export function drawRope(ctx, stage, p) {
+  const c = stage.lastPointer;
+  if (!p || !c) return;
+  const s = stage.toScreen(p.x, p.y);
+  if (Math.hypot(s.x - c.sx, s.y - c.sy) < 2) return;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(79, 157, 255, 0.8)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(c.sx, c.sy);
+  ctx.lineTo(s.x, s.y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * Conta-gotas: pega a cor sob o ponteiro para o preenchimento ('fill') ou o traço ('stroke').
+ * Forma: a cor dela (gradiente inteiro); instância, imagem ou fundo: a cor do pixel.
+ */
+export function pickColor(stage, editor, e, target = 'fill') {
+  const hit = stage.hitTest(e.wx, e.wy);
+  const el = hit?.el;
+  if (el?.type === 'shape') {
+    const inFill = el.fill && el.path.closed && stage.pointInFill(hit, e.wx, e.wy);
+    if (inFill && target === 'fill') {
+      const f = isGradient(el.fill) ? { type: el.fill.type, stops: clone(el.fill.stops) } : el.fill;
+      editor.setStyle({ fill: f, fillOn: true }, { applyToSelection: false });
+      return editor.toast('Cor do preenchimento copiada.');
+    }
+    if (el.stroke && (!inFill || target === 'stroke')) {
+      editor.setStyle({ stroke: el.stroke, strokeOn: true, strokeWidth: el.strokeWidth }, { applyToSelection: false });
+      return editor.toast('Cor e espessura do traço copiadas.');
+    }
+    if (inFill && !isGradient(el.fill)) {
+      editor.setStyle({ stroke: el.fill, strokeOn: true }, { applyToSelection: false });
+      return editor.toast('Cor copiada para o traço.');
+    }
+  }
+  const { canvas } = stage.renderContent({ withBackground: true });
+  const d = canvas.getContext('2d').getImageData(Math.floor(e.sx * stage.dpr), Math.floor(e.sy * stage.dpr), 1, 1).data;
+  const hex = '#' + [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, '0')).join('');
+  editor.setStyle(target === 'fill' ? { fill: hex, fillOn: true } : { stroke: hex, strokeOn: true }, { applyToSelection: false });
+  editor.toast(`Cor ${hex} copiada para o ${target === 'fill' ? 'preenchimento' : 'traço'}.`);
 }
 
 // ---------- Borracha ----------
@@ -147,6 +249,8 @@ export function eraserTool(stage, editor) {
     coalesced: true,
     down(e) {
       pts = [{ x: e.wx, y: e.wy, w: width() }];
+      stage.render();
+      stage.freeze();
     },
     move(e) {
       if (!pts) return;
@@ -159,10 +263,11 @@ export function eraserTool(stage, editor) {
       if (!pts) return;
       const p = pts;
       pts = null;
-      stage.invalidate();
+      stage.unfreeze();
       try {
         const region = V.cleanOutline(V.strokeOutline(p), 0.05 / stage.scale);
-        editor.eraseRegion(region, opts().mode);
+        const r = editor.eraseRegion(region, opts().mode, { allLayers: !!opts().allLayers });
+        if (r?.skippedRig) editor.toast('Partes que dobram com os ossos só podem ser apagadas num quadro com a pose zerada.');
       } catch (err) {
         console.error(err);
         editor.toast('Não foi possível apagar aqui.');
@@ -170,6 +275,7 @@ export function eraserTool(stage, editor) {
     },
     cancel() {
       pts = null;
+      stage.unfreeze();
     },
     hover() {
       stage.setCursor('crosshair');
@@ -189,6 +295,8 @@ export function bucketTool(stage, editor) {
   return {
     cursor: 'crosshair',
     down(e) {
+      // Alt+clique: pega a cor do que está embaixo (conta-gotas rápido)
+      if (e.alt) return pickColor(stage, editor, e, 'fill');
       const fill = editor.style.fill;
       // 1) clicou dentro de uma forma fechada: troca o preenchimento dela
       const hit = stage.hitTest(e.wx, e.wy);
@@ -223,32 +331,13 @@ export function bucketTool(stage, editor) {
 }
 
 // ---------- Conta-gotas ----------
+// Clique: pega a cor do preenchimento (ou do traço, clicando na linha). Shift+clique: pega para o traço.
+// A ferramenta não troca sozinha: a cor vai para as amostras e você escolhe o que fazer com ela.
 export function eyedropperTool(stage, editor) {
   return {
     cursor: 'copy',
     down(e) {
-      const hit = stage.hitTest(e.wx, e.wy);
-      if (hit?.el.type === 'shape') {
-        const el = hit.el;
-        if (el.fill && el.path.closed && stage.pointInFill(hit, e.wx, e.wy)) {
-          const f = isGradient(el.fill) ? { type: el.fill.type, stops: clone(el.fill.stops) } : el.fill;
-          editor.setStyle({ fill: f, fillOn: true }, { applyToSelection: false });
-          editor.setTool('bucket');
-          editor.toast('Preenchimento copiado. Clique para pintar com o balde.');
-          return;
-        }
-        if (el.stroke) {
-          editor.setStyle({ stroke: el.stroke, strokeOn: true, strokeWidth: el.strokeWidth }, { applyToSelection: false });
-          editor.toast('Traço copiado.');
-          return;
-        }
-      }
-      // instância ou fundo: pega a cor do pixel
-      const { canvas } = stage.renderContent({ withBackground: true });
-      const d = canvas.getContext('2d').getImageData(Math.floor(e.sx * stage.dpr), Math.floor(e.sy * stage.dpr), 1, 1).data;
-      const hex = '#' + [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, '0')).join('');
-      editor.setStyle({ fill: hex, fillOn: true }, { applyToSelection: false });
-      editor.toast(`Cor ${hex} copiada para o preenchimento.`);
+      pickColor(stage, editor, e, e.shift ? 'stroke' : 'fill');
     },
   };
 }

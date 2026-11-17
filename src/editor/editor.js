@@ -68,11 +68,11 @@ export class Editor {
     this.loop = true;
     this.toolOptions = {
       brush: { size: 14, pressure: true, smoothing: 40 },
-      eraser: { size: 24, mode: 'normal' },
+      eraser: { size: 24, mode: 'normal', allLayers: false },
       bucket: { gap: 'small' },
-      pencil: { mode: 'smooth' },
       lasso: { mode: 'free' },
       polystar: { style: 'polygon', sides: 5, inner: 50 },
+      pencil: { mode: 'smooth', smoothing: 25 },
       transform: { mode: 'free' },
     };
     this.multi = { enabled: false, before: 2, after: 2 };
@@ -342,7 +342,12 @@ export class Editor {
       }
       if (!lf) continue;
       for (const it of lf.items) {
+        // com ossos, o elemento mostrado é uma cópia na pose: as edições vão para o original (src),
+        // levadas de volta pela matriz da pose (poseB: original → mostrado)
+        const src = lf.span.armature && !lf.tweened && !(lf.motion && it.index === 0) ? lf.span.elements[it.index] : null;
+        const posed = src && src !== it.el ? { src, poseB: multiply(it.el.matrix, invert(src.matrix) || IDENTITY) } : null;
         out.push({
+          ...posed,
           layer,
           span: lf.span,
           el: it.el,
@@ -389,19 +394,22 @@ export class Editor {
     const tweens = new Map();
     for (const it of items) {
       if (it.motion) tweens.set(`${it.layer.id}:${it.span.start}`, { layerId: it.layer.id, span: it.span, tween: clone(it.span.tween) });
-      else els.set(it.el.id, clone(it.el));
+      else els.set(it.el.id, clone(it.src || it.el));
     }
     return { els, tweens };
   }
   /** Muda a matriz (no espaço da camada) ao vivo; no motion tween, mexe nas keys do quadro. */
   setLiveMatrix(it, local) {
     if (it.motion) it.span.tween = this.motionTweenWithMatrix({ ...it.span, tween: it.span.tween }, it.offset, local);
+    else if (it.src) it.src.matrix = multiply(invert(it.poseB) || IDENTITY, local);
     else it.el.matrix = local;
   }
   endLiveEdit(label, snap) {
     const now = this.frameItems().filter((it) => !it.motion && snap.els.has(it.el.id));
-    const cmds = this.groupSelected(now).map(
-      (g) => new C.UpdateElements(g.layer.id, g.span.start, g.items.map((it) => snap.els.get(it.el.id)), g.items.map((it) => it.el)),
+    // preso a osso e sem mudança no original (ex.: pontos editados na cópia da pose): não grava nada
+    const changed = (it) => !it.src || JSON.stringify(snap.els.get(it.el.id)) !== JSON.stringify(it.src);
+    const cmds = this.groupSelected(now.filter(changed)).map(
+      (g) => new C.UpdateElements(g.layer.id, g.span.start, g.items.map((it) => snap.els.get(it.el.id)), g.items.map((it) => it.src || it.el)),
     );
     for (const v of snap.tweens.values()) cmds.push(new C.SetSpanProps(v.layerId, v.span.start, { tween: v.tween }, { tween: v.span.tween }));
     this.commit(new C.Compound(label, cmds));
@@ -409,7 +417,7 @@ export class Editor {
   cancelLiveEdit(snap) {
     for (const it of this.frameItems()) {
       const b = snap.els.get(it.el.id);
-      if (b && !it.motion) Object.assign(it.el, clone(b));
+      if (b && !it.motion) Object.assign(it.src || it.el, clone(b));
     }
     for (const v of snap.tweens.values()) v.span.tween = clone(v.tween);
     this.emit('selection');
@@ -499,10 +507,14 @@ export class Editor {
         items = ids.map((k) => now.find((it) => it.layer.id === k.layer && it.index === k.index)).filter(Boolean);
       }
       const cmds = this.groupSelected(items.filter((it) => !it.motion)).map((g) => {
-        const before = g.items.map((it) => clone(it.el));
+        const before = g.items.map((it) => clone(it.src || it.el));
         const after = before.map((el, k) => {
+          const it = g.items[k];
           const c = clone(el);
-          mutate(c, g.items[k]);
+          // preso a osso: a mudança é feita como aparece na pose e volta para o original
+          if (it.src) c.matrix = multiply(it.poseB, c.matrix);
+          mutate(c, it);
+          if (it.src) c.matrix = multiply(invert(it.poseB) || IDENTITY, c.matrix);
           return c;
         });
         return new C.UpdateElements(g.layer.id, g.span.start, before, after);
@@ -537,13 +549,32 @@ export class Editor {
    * Apaga a região (item do Paper no espaço da timeline) das formas editáveis do quadro.
    * mode: 'normal' | 'fills' | 'lines'. Devolve quantas formas mudaram.
    */
-  eraseRegion(region, mode = 'normal') {
+  /**
+   * Apaga a região (no espaço da tela da timeline) das formas do quadro.
+   * Só na camada ativa, a não ser com allLayers. Parte presa a osso: apaga no desenho original
+   * (levado pela pose); forma que dobra com vários ossos fica de fora (skippedRig).
+   */
+  eraseRegion(region, mode = 'normal', { allLayers = false } = {}) {
+    let skippedRig = 0;
     const compute = () => {
       const res = [];
+      skippedRig = 0;
       for (const it of this.frameItems()) {
         if (it.el.type !== 'shape' || it.motion || it.multi) continue;
-        const out = V.eraseShape({ ...it.el, matrix: it.wm }, region, mode);
+        if (!allLayers && it.layer.id !== this.activeLayerId) continue;
         const inv = invert(it.lm) || IDENTITY;
+        if (it.src) {
+          // dobrada por vários ossos: o caminho mostrado não é o guardado, não dá para levar de volta
+          if (it.el.path !== it.src.path) {
+            if (V.eraseShape({ ...it.el, matrix: it.wm }, region, mode)) skippedRig++;
+            continue;
+          }
+          const back = invert(it.poseB) || IDENTITY;
+          const out = V.eraseShape({ ...it.src, matrix: it.wm }, region, mode);
+          if (out) res.push({ it, out: out.map((el) => ({ ...el, matrix: multiply(back, multiply(inv, el.matrix)) })) });
+          continue;
+        }
+        const out = V.eraseShape({ ...it.el, matrix: it.wm }, region, mode);
         if (out) res.push({ it, out: out.map((el) => ({ ...el, matrix: multiply(inv, el.matrix) })) });
       }
       return res;
@@ -565,7 +596,7 @@ export class Editor {
       count = res.length;
       this.replaceSpans(changes, 'Borracha');
     });
-    return count;
+    return { count, skippedRig };
   }
 
   /** Booleanos entre formas selecionadas: 'union' | 'intersect' | 'punch' | 'crop'. */
@@ -698,7 +729,12 @@ export class Editor {
   copy() {
     const items = this.selectedItems();
     if (!items.length) return false;
-    this.clipboard = items.map((it) => clone(it.el));
+    // preso a osso: copia como aparece (na pose), já solto do esqueleto
+    this.clipboard = items.map((it) => {
+      const c = clone(it.el);
+      if (it.src) for (const k of ['bone', 'skin', 'skinBones']) delete c[k];
+      return c;
+    });
     this.pasteCount = 0;
     return true;
   }

@@ -4,9 +4,10 @@ import { multiply, invert, applyPoint, translation, scaling, rotation, drawEleme
 import { motionPropsAt, setKey } from '../player/tween.js';
 import * as C from './commands.js';
 import { clone } from '../model/document.js';
-import { rectPath, ellipsePath, linePath, freehandPath, makeShape, pointsBounds } from '../model/geometry.js';
-import { brushTool, eraserTool, bucketTool, eyedropperTool, gradientTool } from './tools-paint.js';
-import { subselectTool, lassoTool, polystarTool, penTool, anchorTool, textTool, boneTool, warpTool, threeDTool, widthTool, transformTool, rotateViewTool } from './tools-final.js';
+import { rectPath, ellipsePath, linePath, freehandPath, makeShape, pointsBounds, elementLocalBounds, localBoxCorners } from '../model/geometry.js';
+import { brushTool, eraserTool, bucketTool, eyedropperTool, gradientTool, ropeStabilizer, ropeLength, pickColor, drawRope } from './tools-paint.js';
+import { subselectTool, lassoTool, polystarTool, penTool, anchorTool, textTool, warpTool, threeDTool, widthTool, transformTool, rotateViewTool } from './tools-final.js';
+import { boneTool } from './tools-rig.js';
 import { simplify } from '../model/geometry.js';
 
 const T = (x, y) => translation(x, y);
@@ -56,6 +57,8 @@ function shapeStyle(editor) {
 // Também arrasta os pontos do caminho do motion tween e as dicas de forma.
 function selectTool(stage, editor) {
   let st = null;
+  let hoverId = null;
+  let lastHandle = null;
 
   /** Itens selecionados com a matriz (no espaço da camada) de quando o arraste começou. */
   function capture() {
@@ -89,10 +92,22 @@ function selectTool(stage, editor) {
         }
       }
       const hit = stage.hitTest(e.wx, e.wy);
+      const sel = new Set(editor.selection);
+      // Alt: tira da seleção (clique na peça ou retângulo de seleção)
+      if (e.alt) {
+        if (hit) {
+          sel.delete(hit.el.id);
+          editor.setSelection(sel);
+          st = null;
+          return;
+        }
+        st = { mode: 'marquee', op: 'sub', start: e, cur: e, base: sel };
+        return;
+      }
       if (hit) {
         const id = hit.el.id;
-        const sel = new Set(editor.selection);
         if (e.shift) {
+          // Shift: soma à seleção (ou tira, se a peça já estava selecionada)
           if (sel.has(id)) {
             sel.delete(id);
             editor.setSelection(sel);
@@ -104,12 +119,19 @@ function selectTool(stage, editor) {
         } else if (!sel.has(id)) {
           editor.setSelection([id]);
         }
+        // clicar (sem arrastar) numa peça de uma seleção com várias deixa só ela
+        st = { mode: 'move', start: e, moved: false, only: !e.shift && sel.has(id) && sel.size > 1 ? id : null };
+        stage.setCursor('move');
+        return;
+      }
+      // dentro da moldura da seleção (entre as peças, numa linha fina): arrasta a seleção
+      if (fr && !e.shift && stage.insideSelection(fr, e.sx, e.sy)) {
         st = { mode: 'move', start: e, moved: false };
         stage.setCursor('move');
-      } else {
-        if (!e.shift) editor.deselect();
-        st = { mode: 'marquee', start: e, cur: e, base: new Set(e.shift ? editor.selection : []) };
+        return;
       }
+      if (!e.shift) editor.deselect();
+      st = { mode: 'marquee', op: e.shift ? 'add' : 'set', start: e, cur: e, base: new Set(e.shift ? editor.selection : []) };
     },
 
     move(e) {
@@ -163,6 +185,7 @@ function selectTool(stage, editor) {
         if (e.shift) Math.abs(dx) > Math.abs(dy) ? (dy = 0) : (dx = 0);
         if (!e.ctrl && st.box0) ({ dx, dy } = stage.snapBox(st.box0, dx, dy, new Set(st.items.map((x) => x.it.el.id))));
         W = T(dx, dy);
+        st.readout = `x ${fmtN(dx)}   y ${fmtN(dy)}`;
       } else if (st.mode === 'scale') {
         const { box, F } = st.fr;
         const h = st.handle;
@@ -181,12 +204,15 @@ function selectTool(stage, editor) {
           else sx = Math.abs(sy);
         }
         W = compose(F, T(ax, ay), scaling(sx, sy), T(-ax, -ay), st.Finv);
+        const ux = Math.hypot(F[0], F[1]), uy = Math.hypot(F[2], F[3]);
+        st.readout = `${fmtN(Math.abs(box.w * sx * ux))} × ${fmtN(Math.abs(box.h * sy * uy))}   (${fmtN(sx * 100)}% × ${fmtN(sy * 100)}%)`;
       } else if (st.mode === 'rotate') {
         const { box, F } = st.fr;
         const c = applyPoint(F, box.x + box.w / 2, box.y + box.h / 2);
         let a = Math.atan2(e.wy - c.y, e.wx - c.x) - Math.atan2(st.start.wy - c.y, st.start.wx - c.x);
         if (e.shift) a = Math.round(a / (Math.PI / 12)) * (Math.PI / 12);
         W = compose(T(c.x, c.y), rotation(a), T(-c.x, -c.y));
+        st.readout = `${fmtN((a * 180) / Math.PI)}°`;
       }
       // W vale no espaço da tela da timeline; cada camada pode ter pai/profundidade (lm)
       for (const { it, m0 } of st.items) {
@@ -203,12 +229,8 @@ function selectTool(stage, editor) {
       st = null;
       if (s.mode === 'marquee') {
         if (s.moved) {
-          const r = pointsBounds([
-            { x: s.start.wx, y: s.start.wy },
-            { x: e.wx, y: e.wy },
-          ]);
           const ids = new Set(s.base);
-          for (const it of stage.itemsInRect(r)) ids.add(it.el.id);
+          for (const it of marqueeItems(stage, s, e)) s.op === 'sub' ? ids.delete(it.el.id) : ids.add(it.el.id);
           editor.setSelection(ids);
         }
         stage.invalidate();
@@ -222,7 +244,10 @@ function selectTool(stage, editor) {
         return;
       }
       stage.snapLines = [];
-      if (!s.moved) return;
+      if (!s.moved) {
+        if (s.only) editor.setSelection([s.only]);
+        return;
+      }
       const label = { move: 'Mover', scale: 'Escalar', rotate: 'Girar' }[s.mode];
       editor.endLiveEdit(label, s.snap);
       if (s.materialized) editor.history.squash(2, label);
@@ -237,26 +262,94 @@ function selectTool(stage, editor) {
     },
 
     hover(e) {
-      if (stage.hitShapeHint(e.sx, e.sy) || stage.hitMotionPath(e.sx, e.sy)) return stage.setCursor('pointer');
-      const fr = stage.selectionFrame();
-      const h = fr && stage.hitHandle(fr, e.sx, e.sy);
-      if (h) return stage.setCursor(h.cursor);
-      stage.setCursor(stage.hitTest(e.wx, e.wy) ? 'move' : 'default');
+      const prev = hoverId;
+      hoverId = null;
+      if (stage.hitShapeHint(e.sx, e.sy) || stage.hitMotionPath(e.sx, e.sy)) stage.setCursor('pointer');
+      else {
+        const fr = stage.selectionFrame();
+        const h = fr && stage.hitHandle(fr, e.sx, e.sy);
+        stage.hoverHandle = h?.handle?.id || (h?.type === 'rotate' ? 'rotate' : null);
+        if (h) stage.setCursor(h.cursor);
+        else {
+          const hit = stage.hitTest(e.wx, e.wy);
+          // a peça sob o mouse ganha um contorno: dá para ver o que o clique vai pegar
+          if (hit && !editor.selection.has(hit.el.id)) hoverId = hit.el.id;
+          stage.setCursor(hit || (fr && stage.insideSelection(fr, e.sx, e.sy)) ? 'move' : 'default');
+        }
+      }
+      if (prev !== hoverId || stage.hoverHandle !== lastHandle) stage.invalidate();
+      lastHandle = stage.hoverHandle;
     },
 
     drawScreen(ctx) {
-      if (st?.mode !== 'marquee' || !st.moved) return;
-      const x = Math.min(st.start.sx, st.cur.sx), y = Math.min(st.start.sy, st.cur.sy);
-      const w = Math.abs(st.cur.sx - st.start.sx), h = Math.abs(st.cur.sy - st.start.sy);
-      ctx.save();
-      ctx.fillStyle = 'rgba(79,157,255,0.12)';
-      ctx.strokeStyle = '#4f9dff';
-      ctx.setLineDash([4, 3]);
-      ctx.fillRect(x, y, w, h);
-      ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(w), Math.round(h));
-      ctx.restore();
+      // contorno da peça sob o mouse
+      if (!st && hoverId) {
+        const it = editor.frameItems().find((x) => x.el.id === hoverId);
+        if (it) drawItemBox(ctx, stage, editor, it, 'rgba(79,157,255,0.9)', [3, 2]);
+      }
+      if (st?.mode === 'marquee' && st.moved) {
+        const sub = st.op === 'sub';
+        // o que o retângulo vai pegar (ou tirar) aparece antes de soltar
+        for (const it of marqueeItems(stage, st, st.cur)) drawItemBox(ctx, stage, editor, it, sub ? 'rgba(255,93,93,0.95)' : 'rgba(79,157,255,0.95)', []);
+        const x = Math.min(st.start.sx, st.cur.sx), y = Math.min(st.start.sy, st.cur.sy);
+        const w = Math.abs(st.cur.sx - st.start.sx), h = Math.abs(st.cur.sy - st.start.sy);
+        ctx.save();
+        ctx.fillStyle = sub ? 'rgba(255,93,93,0.10)' : 'rgba(79,157,255,0.12)';
+        ctx.strokeStyle = sub ? '#ff5d5d' : '#4f9dff';
+        ctx.setLineDash([4, 3]);
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(w), Math.round(h));
+        ctx.restore();
+      }
+      // medidas ao mover, escalar e girar
+      if (st?.moved && st.readout && stage.lastPointer) drawReadout(ctx, stage.lastPointer.sx + 16, stage.lastPointer.sy + 18, st.readout);
     },
   };
+}
+
+const fmtN = (v) => String(Math.round(v * 10) / 10).replace('.', ',');
+
+/** Itens que o retângulo de seleção pega: os que encostam nele. */
+function marqueeItems(stage, st, e) {
+  const r = pointsBounds([
+    { x: st.start.wx, y: st.start.wy },
+    { x: e.wx, y: e.wy },
+  ]);
+  return stage.itemsInRect(r);
+}
+
+/** Moldura (girada junto com a peça) de um item. */
+function drawItemBox(ctx, stage, editor, it, color, dash) {
+  const b = elementLocalBounds(it.el, editor.doc, it.offset, it.mcTime);
+  const pts = localBoxCorners(it.wm || it.el.matrix, b).map((p) => stage.toScreen(p.x, p.y));
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash(dash);
+  ctx.beginPath();
+  pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Etiqueta com as medidas, perto do cursor. */
+export function drawReadout(ctx, x, y, text) {
+  ctx.save();
+  ctx.font = '12px "Segoe UI", system-ui, sans-serif';
+  const w = ctx.measureText(text).width + 12;
+  const cw = ctx.canvas.width / (window.devicePixelRatio || 1);
+  if (x + w > cw - 4) x = cw - 4 - w;
+  ctx.fillStyle = 'rgba(28,28,32,0.92)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(x, y, w, 20, 4) : ctx.rect(x, y, w, 20);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#e6e6ea';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + 6, y + 10.5);
+  ctx.restore();
 }
 
 // ---------- Câmera: arrastar move a câmera ----------
@@ -407,23 +500,33 @@ function lineTool(stage, editor) {
 // ---------- Lápis ----------
 function pencilTool(stage, editor) {
   let pts = null;
+  let rope = null;
   return {
     cursor: 'crosshair',
+    coalesced: true,
     down(e) {
-      pts = [{ x: e.wx, y: e.wy }];
+      // Alt+clique: pega a cor do traço que está embaixo
+      if (e.alt) return pickColor(stage, editor, e, 'stroke');
+      rope = ropeStabilizer(ropeLength(editor.toolOptions.pencil?.smoothing ?? 25, stage.scale));
+      const p = rope.push(e.wx, e.wy);
+      pts = [{ x: p.x, y: p.y }];
+      stage.render();
+      stage.freeze();
     },
     move(e) {
       if (!pts) return;
-      const last = pts[pts.length - 1];
-      if (Math.hypot(e.wx - last.x, e.wy - last.y) * stage.scale < 1.5) return;
-      pts.push({ x: e.wx, y: e.wy });
+      const p = rope.push(e.wx, e.wy);
+      if (p) {
+        const last = pts[pts.length - 1];
+        if (Math.hypot(p.x - last.x, p.y - last.y) * stage.scale >= 1.5) pts.push({ x: p.x, y: p.y });
+      }
       stage.invalidate();
     },
     up() {
       if (!pts) return;
       const p = pts;
       pts = null;
-      stage.invalidate();
+      stage.unfreeze();
       if (p.length < 2) return;
       const s = editor.style;
       const { path, cx, cy } = pencilPath(p, editor.toolOptions.pencil?.mode || 'smooth', stage.scale);
@@ -431,6 +534,7 @@ function pencilTool(stage, editor) {
     },
     cancel() {
       pts = null;
+      stage.unfreeze();
     },
     drawWorld(ctx) {
       if (!pts || pts.length < 2) return;
@@ -443,6 +547,9 @@ function pencilTool(stage, editor) {
       pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
       ctx.stroke();
       ctx.restore();
+    },
+    drawScreen(ctx) {
+      if (pts) drawRope(ctx, stage, rope?.point);
     },
   };
 }

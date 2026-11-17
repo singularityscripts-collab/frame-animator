@@ -33,6 +33,7 @@ const optSelect = (key, label, opts) => `
 
 export const TOOL_OPTIONS_FINAL = {
   pencil: `${optSelect('pencil.mode', 'Modo', [['smooth', 'Suavizar'], ['straighten', 'Endireitar'], ['ink', 'Tinta (como foi feito)']])}
+    ${optRange('pencil.smoothing', 0, 100, 'Estabilizar')}
     <p class="hint">Endireitar transforma o rabisco em retas e reconhece linha, retângulo e elipse.</p>`,
   lasso: `${optSelect('lasso.mode', 'Modo', [['free', 'Livre'], ['polygon', 'Poligonal']])}
     <p class="hint">Poligonal: clique ponto a ponto e feche no primeiro ponto, com duplo clique ou Enter. Shift soma à seleção.</p>`,
@@ -48,7 +49,7 @@ export const TOOL_OPTIONS_FINAL = {
   penDelete: '<p class="hint">Clique num ponto para removê-lo.</p>',
   penConvert: '<p class="hint">Clique num ponto curvo para virar canto; arraste num canto para puxar alças.</p>',
   text: `<p class="hint">Clique no palco para escrever. Clique num texto para editar. O tipo (estático, dinâmico, de entrada) fica nas propriedades do texto.</p>`,
-  bone: '<p class="hint">Arraste de um objeto para outro para ligar com um osso; arraste da ponta de um osso para continuar a cadeia. Desenhando os ossos dentro de uma forma (linha, braço), ela dobra junto com eles. Depois, arraste um objeto preso ou a forma para posar (cinemática inversa; Alt+arrastar na forma cria um osso novo): cada pose vira um keyframe; ligue o tween clássico entre poses.</p>',
+  bone: '<p class="hint">Os modos, a lista de ossos e as poses ficam na seção Esqueleto, acima. A faixa no alto do palco mostra o modo e o que cada arraste faz.</p>',
   warp: '<p class="hint">Clique numa forma ou imagem para pôr pinos; arraste um pino para deformar. Alt+clique tira o pino.</p>',
   threeD: '<p class="hint">Arraste uma instância para girar em X e Y. Shift+arrastar move em Z (profundidade). A perspectiva fica nas propriedades do documento.</p>',
   width: '<p class="hint">Arraste numa linha para engrossar ou afinar naquele ponto. Alt+clique tira o ponto de largura.</p>',
@@ -59,7 +60,7 @@ export const TOOL_OPTIONS_FINAL = {
 export function finalSig(ed, items) {
   const el = items[0]?.el;
   if (!el) return `${ed.tool}`;
-  return [el.type, el.kind, (el.filters || []).map((f) => f.type).join(','), el.brush?.type, el.behavior, items.length, el.bone ? 1 : 0, el.warp?.pins?.length || 0].join(':');
+  return [el.type, el.kind, (el.filters || []).map((f) => f.type).join(','), el.brush?.type, el.behavior, items.length, el.bone || el.skin ? 1 : 0, el.warp?.pins?.length || 0].join(':');
 }
 
 const num = (k, label, min, max, step = 1) =>
@@ -169,7 +170,7 @@ export function buildFinal(ui, items) {
     if (shapes.length === items.length) ok.push('<button class="btn-flat" data-a="optimizeCurves">Otimizar curvas…</button>');
     ok.push('<button class="btn-flat" data-a="breakApart">Separar (Ctrl+B)</button>');
     if (items.some((it) => it.el.warp)) ok.push('<button class="btn-flat" data-a="clearWarp">Tirar pinos</button>');
-    if (items.some((it) => it.el.bone)) ok.push('<button class="btn-flat" data-a="unbindBone">Soltar do osso</button>');
+    if (items.some((it) => it.el.bone || it.el.skin)) ok.push('<button class="btn-flat" data-a="unbindBone">Soltar do osso</button>');
     ui.section('Modificar', `<div class="prop-grid">${ok.join('')}</div>`);
   }
 

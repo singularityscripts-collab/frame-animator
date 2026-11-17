@@ -119,7 +119,7 @@ test('editor: unir com desfazer, borracha com desfazer', () => {
   ed.undo();
   assert.equal(ed.activeLayer.frames[0].elements.length, 2);
 
-  const n = ed.eraseRegion(new paper.Path.Rectangle({ point: [-10, 40], size: [300, 20], insert: false }), 'normal');
+  const n = ed.eraseRegion(new paper.Path.Rectangle({ point: [-10, 40], size: [300, 20], insert: false }), 'normal').count;
   assert.equal(n, 2);
   const els = ed.activeLayer.frames[0].elements;
   assert.ok(els.every((e) => e.path.subs?.length === 2), 'cada retângulo virou duas partes');

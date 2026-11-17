@@ -1,13 +1,11 @@
 // Ferramentas da fase final: subseleção, laço, polígono/estrela, caneta (e pontos), texto, ossos,
 // malha de pinos, 3D, largura, transformação livre (inclinar, distorcer, envelope) e girar a vista.
 
-import { multiply, invert, applyPoint, translation, IDENTITY, subpaths, getSpanAt, layerFrame, drawElement } from '../player/render.js';
+import { multiply, invert, applyPoint, translation, IDENTITY, subpaths, layerFrame, drawElement } from '../player/render.js';
 import { makeShape, pointsBounds, pathBounds } from '../model/geometry.js';
 import { clone } from '../model/document.js';
 import { mlsPoint, subdivideSub } from '../player/mesh.js';
-import { solveBones, solveIK, lerpPose } from '../player/bones.js';
-import { flattenSub, measure, nearestS, pointAt, distToSegment } from '../player/geom.js';
-import { applyEase } from '../player/ease.js';
+import { flattenSub, measure, nearestS, pointAt } from '../player/geom.js';
 import * as C from './commands.js';
 
 const inv = (m) => invert(m) || IDENTITY;
@@ -618,147 +616,7 @@ export function textTool(stage, editor) {
   };
 }
 
-// ---------- Ossos (M) ----------
-/** Pose que o keyframe mostra neste quadro (com o tween de pose). */
-export function currentPose(layer, frame) {
-  const span = getSpanAt(layer, frame);
-  if (!span?.armature) return null;
-  const i = layer.frames.indexOf(span);
-  const next = layer.frames[i + 1];
-  let pose = span.armature.pose || {};
-  if (span.tween && next?.armature && frame > span.start) pose = lerpPose(pose, next.armature.pose || {}, applyEase((frame - span.start) / span.duration, span.tween));
-  return { span, arm: span.armature, pose };
-}
-
-export function boneTool(stage, editor) {
-  let st = null;
-  const lmOf = () => editor.layerMatrixOf(editor.activeLayer);
-  const info = () => currentPose(editor.activeLayer, editor.frame);
-  function bonesScreen() {
-    const cur = info();
-    if (!cur) return [];
-    const lm = lmOf();
-    return [...solveBones(cur.arm, cur.pose)].map(([id, b]) => {
-      const h = applyPoint(lm, b.head.x, b.head.y), t = applyPoint(lm, b.tail.x, b.tail.y);
-      return { id, head: stage.toScreen(h.x, h.y), tail: stage.toScreen(t.x, t.y) };
-    });
-  }
-  return {
-    cursor: 'crosshair',
-    down(e) {
-      const bs = bonesScreen();
-      const tailHit = bs.find((b) => Math.hypot(b.tail.x - e.sx, b.tail.y - e.sy) <= 8);
-      const hit = stage.hitTest(e.wx, e.wy);
-      const lmInv = inv(lmOf());
-      const local = applyPoint(lmInv, e.wx, e.wy);
-      if (tailHit && !e.alt) {
-        st = { mode: 'create', parentId: tailHit.id, head: local, startEl: null };
-        return;
-      }
-      // IK: arrastar um elemento preso a um osso (ou o próprio osso)
-      const shaft = bs.find((b) => distToSegment(e.sx, e.sy, b.head, b.tail) <= 5);
-      let boneId = hit?.el.bone || shaft?.id;
-      // forma com pele: arrastar a forma puxa o osso mais perto do clique (Alt cria um osso novo nela)
-      if (!boneId && hit?.el.skin && !e.alt && info()) {
-        const cur = info();
-        let best = Infinity;
-        for (const [id, b] of solveBones(cur.arm, cur.pose)) {
-          const d = distToSegment(local.x, local.y, b.head, b.tail);
-          if (d < best) {
-            best = d;
-            boneId = id;
-          }
-        }
-      }
-      if (boneId && info()) {
-        const n0 = editor.history.undoStack.length;
-        const span = editor.poseKeyframeHere();
-        st = { mode: 'ik', boneId, span, before: clone(span.armature), created: editor.history.undoStack.length - n0, lmInv };
-        return;
-      }
-      if (hit && hit.layer.id === editor.activeLayerId) {
-        st = { mode: 'create', parentId: null, head: local, startEl: hit.el.id };
-        return;
-      }
-      editor.toast('Comece o osso sobre um objeto da camada ativa (ou na ponta de um osso).');
-    },
-    move(e) {
-      if (!st) return;
-      if (st.mode === 'create') {
-        st.tail = applyPoint(inv(lmOf()), e.wx, e.wy);
-        stage.invalidate();
-        return;
-      }
-      const target = applyPoint(st.lmInv, e.wx, e.wy);
-      st.span.armature = { ...st.span.armature, pose: solveIK(st.span.armature, st.span.armature.pose || {}, st.boneId, target, 12) };
-      stage.invalidate();
-    },
-    up(e) {
-      if (!st) return;
-      const s = st;
-      st = null;
-      if (s.mode === 'create') {
-        const tail = applyPoint(inv(lmOf()), e.wx, e.wy);
-        if (Math.hypot(tail.x - s.head.x, tail.y - s.head.y) * stage.scale < 6) return stage.invalidate();
-        const end = stage.hitTest(e.wx, e.wy);
-        // termina em outro objeto: ele segue o osso; osso dentro de uma forma: a forma ganha pele e dobra
-        const items = editor.frameItems();
-        const startShape = s.startEl && items.some((i) => i.el.id === s.startEl && i.el.type === 'shape');
-        const endOk = end && end.layer.id === editor.activeLayerId && (end.el.id !== s.startEl || end.el.type === 'shape');
-        const bindId = endOk ? end.el.id : startShape ? s.startEl : null;
-        editor.addBone(s.head, tail, s.parentId, bindId);
-        const skinned = editor.frameItems().some((i) => i.el.skin);
-        if (!bindId && !skinned) editor.toast('Osso criado. Termine o próximo osso sobre um objeto para ele seguir o osso.');
-        return;
-      }
-      editor.commit(new C.SetSpanProps(editor.activeLayerId, s.span.start, { armature: s.before }, { armature: s.span.armature }, 'Pose'));
-      if (s.created) editor.history.squash(s.created + 1, 'Pose');
-    },
-    cancel() {
-      if (st?.mode === 'ik') st.span.armature = st.before;
-      st = null;
-    },
-    drawScreen(ctx) {
-      const bs = bonesScreen();
-      ctx.save();
-      for (const b of bs) {
-        const dx = b.tail.x - b.head.x, dy = b.tail.y - b.head.y;
-        const l = Math.hypot(dx, dy) || 1;
-        const nx = (-dy / l) * 5, ny = (dx / l) * 5;
-        const mx = b.head.x + dx * 0.15, my = b.head.y + dy * 0.15;
-        ctx.fillStyle = 'rgba(255, 214, 10, 0.55)';
-        ctx.strokeStyle = '#7a5d00';
-        ctx.beginPath();
-        ctx.moveTo(b.head.x, b.head.y);
-        ctx.lineTo(mx + nx, my + ny);
-        ctx.lineTo(b.tail.x, b.tail.y);
-        ctx.lineTo(mx - nx, my - ny);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-        for (const p of [b.head, b.tail]) {
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-          ctx.fillStyle = '#fff';
-          ctx.fill();
-          ctx.stroke();
-        }
-      }
-      if (st?.mode === 'create' && st.tail) {
-        const lm = lmOf();
-        const h = applyPoint(lm, st.head.x, st.head.y), t = applyPoint(lm, st.tail.x, st.tail.y);
-        const a = stage.toScreen(h.x, h.y), b = stage.toScreen(t.x, t.y);
-        ctx.strokeStyle = '#ffd60a';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.stroke();
-      }
-      ctx.restore();
-    },
-  };
-}
+// ---------- Ossos (M): ver tools-rig.js ----------
 
 // ---------- Malha de pinos (W) ----------
 export function warpTool(stage, editor) {

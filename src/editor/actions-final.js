@@ -432,7 +432,7 @@ export function extendActions(actions, { editor: ed, stage, io, panels }) {
   });
   add('clearWidth', [], () => ed.updateSelection('Tirar perfil de largura', (el) => void delete el.widthProfile));
   add('clearWarp', [], () => ed.updateSelection('Tirar pinos', (el) => void delete el.warp));
-  add('unbindBone', [], () => ed.updateSelection('Soltar do osso', (el) => void delete el.bone));
+  add('unbindBone', [], () => ed.unbindSelection());
   add('reset3D', [], () =>
     ed.updateSelection('Zerar 3D', (el) => {
       delete el.rx;

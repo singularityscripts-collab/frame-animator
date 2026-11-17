@@ -7,6 +7,7 @@ import { SYMBOL_TYPES, SOUND_SYNC, LABEL_TYPES } from '../model/document.js';
 import { EASE_LABELS } from '../player/ease.js';
 import { BUILTIN_PRESETS } from './presets.js';
 import { solidOf } from './tools-paint.js';
+import { buildRig, refreshRig } from './rig-ui.js';
 import { TOOL_NAMES_FINAL, TOOL_OPTIONS_FINAL, buildFinal, fillFinal, finalSig } from './properties-final.js';
 
 const fmt = (v) => (Math.round(v * 10) / 10).toString();
@@ -34,15 +35,17 @@ const optRange = (key, min, max, label) => `
 const TOOL_OPTIONS = {
   brush: `${optRange('brush.size', 1, 200, 'Tamanho (px)')}
     <label class="field wide" style="margin:6px 0"><input type="checkbox" data-o="brush.pressure"><span style="flex:1">Usar pressão da caneta</span></label>
-    ${optRange('brush.smoothing', 0, 100, 'Suavizar')}
-    <p class="hint">O pincel pinta com a cor de preenchimento. Com mesa digitalizadora, a pressão muda a largura.</p>`,
+    ${optRange('brush.smoothing', 0, 100, 'Estabilizar')}
+    <p class="hint">Pinta com a cor de preenchimento. Estabilizar tira a tremedeira: a linha tracejada é a corda que puxa o traço. O que aparece enquanto você desenha é o traço final. Alt+clique pega a cor.</p>`,
   eraser: `${optRange('eraser.size', 2, 200, 'Tamanho (px na tela)')}
     <label class="field wide" style="margin-top:6px"><span style="flex:1">Modo</span>
-      <select data-o="eraser.mode" style="flex:0 0 140px"><option value="normal">Normal</option><option value="fills">Só preenchimentos</option><option value="lines">Só linhas</option></select></label>`,
+      <select data-o="eraser.mode" style="flex:0 0 140px"><option value="normal">Normal</option><option value="fills">Só preenchimentos</option><option value="lines">Só linhas</option></select></label>
+    <label class="field wide" style="margin-top:6px"><input type="checkbox" data-o="eraser.allLayers"><span style="flex:1">Apagar em todas as camadas destravadas</span></label>
+    <p class="hint" style="margin-top:6px">Sem essa opção, a borracha só apaga na camada ativa.</p>`,
   bucket: `<label class="field wide"><span style="flex:1">Fechar lacunas</span>
       <select data-o="bucket.gap" style="flex:0 0 140px"><option value="none">Não fechar</option><option value="small">Pequenas</option><option value="medium">Médias</option><option value="large">Grandes</option></select></label>
-    <p class="hint" style="margin-top:6px">Clique dentro de uma forma para trocar a cor, ou numa área cercada por linhas para criar um preenchimento por baixo delas.</p>`,
-  eyedropper: '<p class="hint">Clique num preenchimento para copiar a cor (e já pintar com o balde), numa linha para copiar o traço, ou em qualquer ponto para pegar a cor do pixel.</p>',
+    <p class="hint" style="margin-top:6px">Clique dentro de uma forma para trocar a cor, ou numa área cercada por linhas para criar um preenchimento por baixo delas. Alt+clique pega a cor.</p>`,
+  eyedropper: '<p class="hint">Clique num preenchimento para copiar a cor; numa linha, copia o traço; em qualquer outro ponto, a cor do pixel. Shift+clique manda a cor para o traço. No pincel e no balde, Alt+clique faz o mesmo sem trocar de ferramenta.</p>',
   camera: '<p class="hint">Arraste no palco para mover a câmera. Zoom, giro e tom de cor ficam na seção Câmera.</p>',
   gradient: '<p class="hint">Selecione uma forma com gradiente. Arraste o centro para mover, o quadrado para esticar, o círculo de cima para girar e, no radial, o círculo da diagonal para o tamanho e o triângulo para o foco.</p>',
 };
@@ -69,7 +72,7 @@ export class PropertiesUI {
     this.actions = actions;
     this.el = el;
     this.mode = null;
-    for (const t of ['selection', 'doc', 'style', 'tool', 'load', 'layers', 'context', 'toolOptions', 'presets', 'camera', 'frameSel']) editor.on(t, () => this.render());
+    for (const t of ['selection', 'doc', 'style', 'tool', 'load', 'layers', 'context', 'toolOptions', 'presets', 'camera', 'frameSel', 'rig']) editor.on(t, () => this.render());
     editor.on('frame', () => {
       if (!editor.player.playing) this.render();
     });
@@ -91,13 +94,14 @@ export class PropertiesUI {
       const sig = span ? [span.start, span.duration, tw?.type, tw?.easeType, !!nextKf, span.sound?.id, span.sound?.sync, span.label ? 1 : 0, tw?.hints?.length].join(':') : '-';
       mode = `none:${ed.tool}:${sig}:${ed.activeLayerId}:${ed.activeLayer.type}:${ed.editStack.length}:${!!ed.cameraLayer()}:${ed.doc.library.sounds.length}`;
     }
-    mode += `|${finalSig(ed, items)}`;
+    mode += `|${finalSig(ed, items)}|${ed.tool === 'bone' ? 'rig' : ''}`;
     if (mode !== this.mode) {
       this.mode = mode;
       this.el.innerHTML = '';
       this.build(items, span);
     }
     this.fill(items, span);
+    if (ed.tool === 'bone') refreshRig(this);
   }
 
   section(title, html) {
@@ -110,6 +114,7 @@ export class PropertiesUI {
 
   build(items, span) {
     const ed = this.editor;
+    if (ed.tool === 'bone') buildRig(this);
     if (items.length) {
       const shapes = items.filter((it) => it.el.type === 'shape');
       const insts = items.filter((it) => it.el.type === 'instance');

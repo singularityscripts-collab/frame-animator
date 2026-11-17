@@ -66,13 +66,12 @@ test('B5: SVG exportado escapa cor de fundo e tipo da imagem vindos do arquivo',
 });
 
 test('B6: ossos (osso no meio de uma forma): a linha dobra junto com a corrente', () => {
-  // mesma sequência da ferramenta de ossos: o 1º osso começa e termina na própria linha (não prende nada);
-  // os seguintes saem da ponta e terminam na linha (cada um prende a linha inteira a si, trocando o anterior)
+  // mesma sequência da ferramenta de ossos: cada osso desenhado em cima da linha soma à pele dela
   const ed = new Editor();
   const { path: p, cx, cy } = linePath(100, 300, 700, 300);
   const line = makeShape({ path: p, cx, cy, fill: null, stroke: '#000000', strokeWidth: 4 });
   ed.addElements([line]);
-  const b1 = ed.addBone({ x: 100, y: 300 }, { x: 300, y: 300 }, null, null);
+  const b1 = ed.addBone({ x: 100, y: 300 }, { x: 300, y: 300 }, null, line.id);
   const b2 = ed.addBone({ x: 300, y: 300 }, { x: 500, y: 300 }, b1.id, line.id);
   ed.addBone({ x: 500, y: 300 }, { x: 700, y: 300 }, b2.id, line.id);
   // dobra só o 2º osso: o trecho da linha em cima do 1º osso (x = 200) devia ficar parado

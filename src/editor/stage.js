@@ -20,6 +20,7 @@ import {
 import { motionPath } from '../player/tween.js';
 import { localBoxCorners, elementLocalBounds, unionBounds, boundsIntersect } from '../model/geometry.js';
 import { createTools } from './tools.js';
+import { drawSkeleton } from './tools-rig.js';
 import { renderContentFor } from './tools-paint.js';
 
 const HANDLE_IDS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -95,7 +96,7 @@ export class Stage {
       canvas.focus();
     });
 
-    for (const t of ['doc', 'frame', 'selection', 'options', 'layers', 'style']) editor.on(t, () => this.invalidate());
+    for (const t of ['doc', 'frame', 'selection', 'options', 'layers', 'style', 'rig']) editor.on(t, () => this.invalidate());
     editor.on('tool', () => {
       this.updateCursor();
       this.invalidate();
@@ -281,7 +282,12 @@ export class Stage {
     const hit = this.hitTest(ev.wx, ev.wy);
     if (hit?.el.type === 'text') return this.editText(hit);
     if (hit?.el.type === 'instance') this.editor.enterSymbol(hit.el.symbolId, hit);
-    else if (!hit && this.editor.editStack.length) this.editor.exitSymbol();
+    else if (hit?.el.type === 'shape') {
+      // forma: entra na edição dos pontos dela (V volta para a seleção)
+      this.editor.setSelection([hit.el.id]);
+      this.editor.setTool('subselect');
+      this.editor.toast('Editando os pontos da forma. V volta para a seleção.');
+    } else if (!hit && this.editor.editStack.length) this.editor.exitSymbol();
   }
 
   /**
@@ -420,12 +426,30 @@ export class Stage {
     });
   }
 
+  /** Alça de girar visível: uma bolinha acima do meio da borda de cima (fora da moldura). */
+  rotateKnob(fr) {
+    const hs = this.handles(fr);
+    const n = hs.find((h) => h.id === 'n'), s = hs.find((h) => h.id === 's');
+    const dx = n.x - s.x, dy = n.y - s.y;
+    const l = Math.hypot(dx, dy) || 1;
+    return { x: n.x + (dx / l) * 22, y: n.y + (dy / l) * 22, from: n };
+  }
+
+  /** O ponto (tela) cai dentro da moldura da seleção? */
+  insideSelection(fr, sx, sy) {
+    const hs = this.handles(fr);
+    const by = Object.fromEntries(hs.map((h) => [h.id, h]));
+    return pointInPolygon(sx, sy, [by.nw, by.ne, by.se, by.sw]);
+  }
+
   /** Qual alça está sob o ponteiro: { type: 'scale'|'rotate', handle, cursor } ou null. */
   hitHandle(fr, sx, sy) {
     const hs = this.handles(fr);
     const center = hs.reduce((a, h) => ({ x: a.x + h.x / 8, y: a.y + h.y / 8 }), { x: 0, y: 0 });
+    const knob = this.rotateKnob(fr);
+    if (Math.hypot(knob.x - sx, knob.y - sy) <= 8) return { type: 'rotate', handle: hs.find((h) => h.id === 'n'), cursor: ROTATE_CURSOR };
     for (const h of hs) {
-      if (Math.abs(h.x - sx) <= 6 && Math.abs(h.y - sy) <= 6) {
+      if (Math.abs(h.x - sx) <= 7 && Math.abs(h.y - sy) <= 7) {
         const ang = Math.atan2(h.y - center.y, h.x - center.x);
         const idx = ((Math.round(ang / (Math.PI / 4)) % 4) + 4) % 4;
         return { type: 'scale', handle: h, cursor: RESIZE_CURSORS[idx] };
@@ -511,12 +535,38 @@ export class Stage {
     });
   }
 
+  /**
+   * Durante um traço (pincel, lápis, borracha) o desenho não muda: guarda a imagem do palco e
+   * só redesenha o rastro por cima. Assim o traço não atrasa, mesmo em cenas pesadas.
+   */
+  freeze() {
+    const c = (this._frozen ||= document.createElement('canvas'));
+    c.width = this.canvas.width;
+    c.height = this.canvas.height;
+    c.getContext('2d').drawImage(this.canvas, 0, 0);
+    this.frozen = c;
+  }
+  unfreeze() {
+    if (!this.frozen) return;
+    this.frozen = null;
+    this.invalidate();
+  }
+
   render() {
     const { ctx, canvas, dpr, editor } = this;
     const doc = editor.doc;
     const playing = editor.player.playing;
     const sceneBase = this.deviceView();
     const base = multiply(sceneBase, editor.contextMatrix);
+    if (this.frozen && this.active && this.frozen.width === canvas.width && this.frozen.height === canvas.height) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(this.frozen, 0, 0);
+      ctx.setTransform(...base);
+      this.active.drawWorld?.(ctx);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.active.drawScreen?.(ctx);
+      return;
+    }
     const stack = editor.editStack;
     const isolated = stack[0]?.isolated;
 
@@ -574,6 +624,8 @@ export class Stage {
         this.drawShapeHints(ctx);
       }
       tool.drawScreen?.(ctx);
+      // o esqueleto da camada ativa continua visível (discreto) com as outras ferramentas
+      if (editor.tool !== 'bone') drawSkeleton(this, editor, ctx);
       this.drawSnapLines(ctx);
     }
   }
@@ -690,11 +742,29 @@ export class Stage {
     const hs = this.handles(fr);
     const byId = Object.fromEntries(hs.map((h) => [h.id, h]));
     strokePoly(ctx, [byId.nw, byId.ne, byId.se, byId.sw]);
-    ctx.fillStyle = '#ffffff';
-    for (const h of hs) {
-      ctx.fillRect(Math.round(h.x) - 3.5, Math.round(h.y) - 3.5, 7, 7);
-      ctx.strokeRect(Math.round(h.x) - 3.5, Math.round(h.y) - 3.5, 7, 7);
+    const tools = this.editor.tool === 'select';
+    if (tools) {
+      // alça de girar: haste e bolinha acima da borda de cima
+      const k = this.rotateKnob(fr);
+      ctx.beginPath();
+      ctx.moveTo(k.from.x, k.from.y);
+      ctx.lineTo(k.x, k.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(k.x, k.y, this.hoverHandle === 'rotate' ? 6 : 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = this.hoverHandle === 'rotate' ? accent : '#ffffff';
+      ctx.fill();
+      ctx.stroke();
     }
+    for (const h of hs) {
+      // alça sob o mouse acende (dá para ver qual vai ser puxada)
+      const hot = tools && this.hoverHandle === h.id;
+      const r = hot ? 5 : 4;
+      ctx.fillStyle = hot ? accent : '#ffffff';
+      ctx.fillRect(Math.round(h.x) - r, Math.round(h.y) - r, r * 2, r * 2);
+      ctx.strokeRect(Math.round(h.x) - r, Math.round(h.y) - r, r * 2, r * 2);
+    }
+    ctx.fillStyle = '#ffffff';
     // ponto de transformação: centro da forma; numa instância, o ponto de registro do símbolo
     const single = fr.items.length === 1 ? fr.items[0] : null;
     const c =
