@@ -205,24 +205,122 @@ export function morphPath(pairs, t) {
   return subs.length === 1 ? subs[0] : { closed: subs.every((s) => s.closed), fillRule: 'nonzero', subs };
 }
 
-// ---------- traço de largura variável (ferramenta de largura) ----------
-/** Largura relativa no ponto t (0 a 1) do traço. profile = [{ t, w }] (w multiplica a espessura). */
-export function profileAt(profile, t) {
-  const pts = [...profile].sort((a, b) => a.t - b.t);
-  if (!pts.length) return 1;
-  if (pts[0].t > 0) pts.unshift({ t: 0, w: 1 });
-  if (pts[pts.length - 1].t < 1) pts.push({ t: 1, w: 1 });
-  for (let i = 1; i < pts.length; i++) {
-    if (t <= pts[i].t) {
-      const a = pts[i - 1], b = pts[i];
-      const u = (t - a.t) / (b.t - a.t || 1);
-      return a.w + (b.w - a.w) * u;
-    }
+// ---------- traço de largura variável (ferramenta de largura, lápis e pincel com pressão) ----------
+/** Perfil ordenado e com as pontas 0 e 1 (guardado por perfil, para não reordenar a cada ponto). */
+const profileCache = new WeakMap();
+function sortedProfile(profile) {
+  let pts = profileCache.get(profile);
+  if (pts) return pts;
+  pts = [...profile].sort((a, b) => a.t - b.t);
+  if (pts.length) {
+    if (pts[0].t > 0) pts.unshift({ t: 0, w: 1 });
+    if (pts[pts.length - 1].t < 1) pts.push({ t: 1, w: 1 });
   }
-  return pts[pts.length - 1].w;
+  profileCache.set(profile, pts);
+  return pts;
 }
 
-/** Contorno (polígonos) de um traço com largura variável, no espaço local da forma. */
+/** Largura relativa no ponto t (0 a 1) do traço. profile = [{ t, w }] (w multiplica a espessura). */
+export function profileAt(profile, t) {
+  const pts = sortedProfile(profile);
+  if (!pts.length) return 1;
+  // busca binária: perfis de caneta têm dezenas de pontos
+  let lo = 1, hi = pts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (pts[mid].t < t) lo = mid + 1;
+    else hi = mid;
+  }
+  const a = pts[lo - 1], b = pts[lo];
+  if (t <= a.t) return a.w;
+  if (t >= b.t) return b.w;
+  const u = (t - a.t) / (b.t - a.t || 1);
+  return a.w + (b.w - a.w) * u;
+}
+
+/**
+ * Tira pontos do perfil que a interpolação entre os vizinhos já reproduz (erro ≤ tol na largura).
+ * Mantém o primeiro e o último. Valores arredondados para o JSON ficar pequeno.
+ */
+export function reduceProfile(profile, tol = 0.02) {
+  const pts = [...profile].sort((a, b) => a.t - b.t);
+  if (pts.length <= 2) return pts.map((p) => ({ t: +p.t.toFixed(4), w: +p.w.toFixed(3) }));
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    let worst = -1, idx = -1;
+    for (let i = a + 1; i < b; i++) {
+      const u = (pts[i].t - pts[a].t) / (pts[b].t - pts[a].t || 1);
+      const d = Math.abs(pts[a].w + (pts[b].w - pts[a].w) * u - pts[i].w);
+      if (d > worst) {
+        worst = d;
+        idx = i;
+      }
+    }
+    if (worst > tol) {
+      keep[idx] = 1;
+      stack.push([a, idx], [idx, b]);
+    }
+  }
+  return pts.filter((_, i) => keep[i]).map((p) => ({ t: +p.t.toFixed(4), w: +p.w.toFixed(3) }));
+}
+
+/**
+ * Perfil de largura para um caminho novo tirado de outro (borracha cortou a linha, por exemplo):
+ * cada trecho do caminho novo herda a largura do ponto mais perto no caminho antigo.
+ * dx, dy: deslocamento do espaço local novo para o antigo.
+ */
+export function remapProfile(oldPath, profile, newPath, dx = 0, dy = 0) {
+  if (!profile?.length) return profile;
+  const I = [1, 0, 0, 1, 0, 0];
+  const olds = subpaths(oldPath).map((sp) => measure(flattenSub(sp, I, 10)));
+  const oldTotal = olds.reduce((n, m) => n + m.total, 0) || 1;
+  const news = subpaths(newPath).map((sp) => measure(flattenSub(sp, [1, 0, 0, 1, dx, dy], 10)));
+  const newTotal = news.reduce((n, m) => n + m.total, 0) || 1;
+  const widthNear = (x, y) => {
+    let best = Infinity, bestT = 0, acc = 0;
+    for (const m of olds) {
+      const s = nearestS(m, x, y);
+      const p = pointAt(m, s);
+      const d = Math.hypot(p.x - x, p.y - y);
+      if (d < best) {
+        best = d;
+        bestT = (acc + s) / oldTotal;
+      }
+      acc += m.total;
+    }
+    return profileAt(profile, bestT);
+  };
+  const out = [];
+  let acc = 0;
+  for (const m of news) {
+    const steps = Math.max(8, Math.min(96, Math.ceil(m.total / 4)));
+    for (let k = 0; k <= steps; k++) {
+      // as pontas de cada pedaço entram com um respiro, para não misturar com o pedaço vizinho
+      const s = Math.min(m.total, Math.max(0, (m.total * k) / steps));
+      const p = pointAt(m, s);
+      const t = (acc + s) / newTotal;
+      out.push({ t: k === 0 ? t + 1e-5 : k === steps ? t - 1e-5 : t, w: widthNear(p.x, p.y) });
+    }
+    acc += m.total;
+  }
+  const r = reduceProfile(out, 0.02);
+  return r.every((p) => Math.abs(p.w - 1) < 0.03) ? undefined : r;
+}
+
+/** Pontos de meia-volta (ponta redonda) em torno de p, saindo de n0 pela direção d. */
+function capArc(p, r, nx, ny, dx, dy, steps = 8) {
+  const out = [];
+  for (let k = 1; k < steps; k++) {
+    const a = (Math.PI * k) / steps, c = Math.cos(a), s = Math.sin(a);
+    out.push({ x: p.x + r * (nx * c + dx * s), y: p.y + r * (ny * c + dy * s) });
+  }
+  return out;
+}
+
+/** Contorno (polígonos) de um traço com largura variável, no espaço local da forma. Pontas redondas. */
 export function variableStrokePolys(path, width, profile) {
   const subs = subpaths(path).map((sp) => measure(flattenSub(sp, [1, 0, 0, 1, 0, 0], 10)));
   const total = subs.reduce((n, m) => n + m.total, 0) || 1;
@@ -236,7 +334,7 @@ export function variableStrokePolys(path, width, profile) {
     for (let k = 0; k <= steps; k++) rs.push(pointAt(m0, (m0.total * k) / steps));
     const m = measure(rs.map((q) => ({ x: q.x, y: q.y })));
     const n = m.points.length;
-    const left = [], right = [];
+    const left = [], right = [], tans = [], radii = [];
     for (let i = 0; i < n; i++) {
       const a = m.points[Math.max(0, i - 1)], c = m.points[Math.min(n - 1, i + 1)];
       let tx = c.x - a.x, ty = c.y - a.y;
@@ -247,11 +345,19 @@ export function variableStrokePolys(path, width, profile) {
       const p = m.points[i];
       left.push({ x: p.x - ty * r, y: p.y + tx * r });
       right.push({ x: p.x + ty * r, y: p.y - tx * r });
+      tans.push([tx, ty]);
+      radii.push(r);
     }
     const closed = Math.hypot(m.points[0].x - m.points[n - 1].x, m.points[0].y - m.points[n - 1].y) < 0.01;
     if (closed) {
       polys.push(left, right.reverse());
-    } else polys.push([...left, ...right.reverse()]);
+    } else {
+      // pontas redondas: meia-volta na frente do fim e atrás do começo
+      const [ex, ey] = tans[n - 1], [sx, sy] = tans[0];
+      const endCap = capArc(m.points[n - 1], radii[n - 1], -ey, ex, ex, ey);
+      const startCap = capArc(m.points[0], radii[0], sy, -sx, -sx, -sy);
+      polys.push([...left, ...endCap, ...right.reverse(), ...startCap]);
+    }
     acc += m.total;
   }
   return polys;

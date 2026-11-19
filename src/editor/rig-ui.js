@@ -15,9 +15,13 @@ export function buildRig(ui) {
   const body = sec.querySelector('.rig-panel');
   const ed = ui.editor;
   body.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-bone],[data-pin],[data-ra],[data-mode]');
+    const t = e.target.closest('[data-bone],[data-pin],[data-ra],[data-mode],[data-pose-apply],[data-pose-del],[data-smart-edit],[data-smart-del]');
     if (!t) return;
     if (t.dataset.mode) return ed.setRigMode(t.dataset.mode);
+    if (t.dataset.poseApply) return ed.applyPose(t.dataset.poseApply);
+    if (t.dataset.poseDel) return ed.deletePose(t.dataset.poseDel);
+    if (t.dataset.smartEdit) return ed.setRigState({ smartEdit: ed.rigState().smartEdit === t.dataset.smartEdit ? null : t.dataset.smartEdit });
+    if (t.dataset.smartDel) return ed.deleteSmartCorrection(t.dataset.smartDel);
     if (t.dataset.pin) {
       const b = ed.rigBones().find((x) => x.id === t.dataset.pin);
       if (b) ed.setBoneProps(b.id, { pin: !b.pin }, b.pin ? 'Soltar junta' : 'Fixar junta');
@@ -33,6 +37,9 @@ export function buildRig(ui) {
     if (a === 'paste') ed.pastePose();
     if (a === 'mirror') ed.mirrorPose();
     if (a === 'reset') ed.resetPose();
+    if (a === 'poseSave') ed.savePose();
+    if (a === 'smartNew') ed.addSmartCorrection();
+    if (a === 'smartDone') ed.setRigState({ smartEdit: null });
   });
   body.addEventListener('change', (e) => {
     const t = e.target;
@@ -49,6 +56,14 @@ export function buildRig(ui) {
     }
     if (t.dataset.bf === 'pin') ed.setBoneProps(sel, { pin: t.checked }, t.checked ? 'Fixar junta' : 'Soltar junta');
     if (t.dataset.bf === 'limit') ed.setBoneProps(sel, t.checked ? { min: -Math.PI / 2, max: Math.PI / 2 } : { min: null, max: null }, 'Limite do osso');
+    if (t.dataset.bf === 'strength') ed.setBoneProps(sel, { strength: Math.max(0.1, Math.min(5, Number(t.value) || 1)) }, 'Força do osso');
+    if (t.dataset.bf === 'dyn') ed.setBoneProps(sel, { dynamics: t.checked ? { stiffness: 0.2, damping: 0.15, gravity: 0 } : null }, t.checked ? 'Ligar dinâmica' : 'Desligar dinâmica');
+    if (t.dataset.bf?.startsWith('dyn') && t.dataset.bf !== 'dyn' && b.dynamics) {
+      const key = { dynStiff: 'stiffness', dynDamp: 'damping', dynGrav: 'gravity' }[t.dataset.bf];
+      const v = Number(t.value) || 0;
+      const val = key === 'gravity' ? Math.max(-5, Math.min(5, v)) : Math.max(0, Math.min(100, v)) / 100;
+      ed.setBoneProps(sel, { dynamics: { ...b.dynamics, [key]: val } }, 'Dinâmica do osso');
+    }
     if (t.dataset.bf === 'min' || t.dataset.bf === 'max') {
       const v = Math.max(-180, Math.min(180, Number(t.value) || 0)) / DEG;
       ed.setBoneProps(sel, { [t.dataset.bf]: v }, 'Limite do osso');
@@ -114,6 +129,20 @@ export function refreshRig(ui) {
               <p class="hint">${mode === 'edit' ? 'Ou arraste as bolinhas do arco no palco.' : 'Em Editar rig, dá para arrastar o arco no palco.'}</p>`
             : ''
         }
+        ${mode === 'edit' ? `<label class="field wide"><span style="flex:1">Força (influência na pele)</span><input type="number" min="0.1" max="5" step="0.1" data-bf="strength" value="${sel.strength ?? 1}" style="flex:0 0 70px"></label>
+        <p class="hint">As bolinhas na forma mostram o quanto cada ponto segue este osso. Mais força = puxa uma área maior.</p>` : ''}
+        <label class="field wide"><input type="checkbox" data-bf="dyn" ${sel.dynamics ? 'checked' : ''}><span>Dinâmica: balança sozinho (cabelo, rabo, orelha)</span></label>
+        ${
+          sel.dynamics
+            ? `<div class="prop-grid">
+                <label class="field"><span>Rigidez</span><input type="number" min="0" max="100" step="5" data-bf="dynStiff" value="${Math.round((sel.dynamics.stiffness ?? 0.2) * 100)}"></label>
+                <label class="field"><span>Amortecer</span><input type="number" min="0" max="100" step="5" data-bf="dynDamp" value="${Math.round((sel.dynamics.damping ?? 0.15) * 100)}"></label>
+                <label class="field"><span>Gravidade</span><input type="number" min="-5" max="5" step="0.1" data-bf="dynGrav" value="${sel.dynamics.gravity ?? 0}"></label>
+              </div>
+              <p class="hint">O balanço aparece ao tocar e ao trocar de quadro (o esqueleto mostra a pose com keys).</p>`
+            : ''
+        }
+        ${mode === 'pose' ? smartHtml(ed, sel) : ''}
         ${mode === 'edit' ? `<p class="hint">${parts ? `${parts} ${parts === 1 ? 'parte presa' : 'partes presas'} a este osso (moldura na cor dele no palco).` : 'Nenhuma parte presa a este osso: Ctrl+clique numa parte no palco.'}</p>
         <button class="btn-flat full danger-hover" data-ra="delete" title="Delete">Apagar osso</button>` : ''}
       </div>`
@@ -135,7 +164,8 @@ export function refreshRig(ui) {
             <button class="btn-flat" data-ra="paste" ${rs.clip ? '' : 'disabled'}>Colar pose</button>
             <button class="btn-flat" data-ra="mirror" title="Troca esquerda e direita (pernas e braços)">Espelhar pose</button>
             <button class="btn-flat" data-ra="reset" title="${sel ? 'Zera o osso selecionado e os filhos' : 'Zera o esqueleto todo'}">${sel ? 'Zerar osso' : 'Zerar pose'}</button>
-          </div>`
+          </div>
+          ${posesHtml(ed)}`
         : '';
 
   body.innerHTML = `
@@ -150,4 +180,34 @@ export function refreshRig(ui) {
     ${tree}
     ${selHtml}
     ${actions}`;
+}
+
+/** Correções Smart Bone do osso selecionado (modo Posar). */
+function smartHtml(ed, sel) {
+  const list = ed.smartCorrections(sel.id);
+  const editing = ed.rigState().smartEdit;
+  const rows = list
+    .map((c) => {
+      const w = Math.round(ed.smartWeightNow(c.id) * 100);
+      const n = Object.values(c.shapes || {}).reduce((a, x) => a + Object.keys(x).length, 0);
+      return `<li class="${c.id === editing ? 'on' : ''}"><span class="bone-name">${fmt(c.angle)}° · ${n} ${n === 1 ? 'ponto' : 'pontos'} · agora ${w}%</span>
+        <button class="bone-pin ${c.id === editing ? 'on' : ''}" data-smart-edit="${c.id}">${c.id === editing ? 'editando' : 'editar'}</button>
+        <button class="bone-pin" data-smart-del="${c.id}" title="Apagar correção">×</button></li>`;
+    })
+    .join('');
+  const cur = list.find((c) => c.id === editing);
+  return `<h4 class="rig-h">Smart Bone (correções)</h4>
+    ${rows ? `<ul class="bone-tree">${rows}</ul>` : '<p class="hint">Dobre o osso (ex.: cotovelo a 90°) e crie uma correção: ao chegar nesse ângulo, a forma ajusta sozinha (o cotovelo não amassa).</p>'}
+    ${cur ? '<p class="hint"><b>Editando:</b> arraste os pontos amarelos da forma no palco. O ajuste aparece aos poucos conforme o osso gira.</p><button class="btn-flat full" data-ra="smartDone">Concluir correção</button>' : '<button class="btn-flat full" data-ra="smartNew">Nova correção neste ângulo</button>'}`;
+}
+
+/** Biblioteca de poses da camada (modo Posar). */
+function posesHtml(ed) {
+  const poses = ed.poseAt()?.arm.poses || [];
+  const rows = poses
+    .map((p) => `<li><span class="bone-name">${esc(p.name)}</span><button class="bone-pin" data-pose-apply="${p.id}">aplicar</button><button class="bone-pin" data-pose-del="${p.id}" title="Apagar pose">×</button></li>`)
+    .join('');
+  return `<h4 class="rig-h">Biblioteca de poses</h4>
+    ${rows ? `<ul class="bone-tree">${rows}</ul>` : '<p class="hint">Guarde poses (mão aberta, boca, piscar…) para aplicar com um clique em qualquer quadro.</p>'}
+    <button class="btn-flat full" data-ra="poseSave">Guardar pose atual</button>`;
 }

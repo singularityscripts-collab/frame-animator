@@ -17,6 +17,7 @@ import { clone } from '../model/document.js';
 import { floodFill, traceContours, polygonArea } from '../model/raster.js';
 import * as V from '../model/vector-ops.js';
 import { applyFill } from './editor.js';
+import { pressureFactor, strokeFromSamples, liveWidths, finalWidths, fidelityTolerance } from '../model/stroke.js';
 
 export const GAP_SIZES = { none: 0, small: 3, medium: 6, large: 12 };
 
@@ -27,15 +28,14 @@ export function solidOf(fill) {
 }
 
 /**
- * Pressão da caneta → fator da largura (0,12 a 1).
+ * Pressão da caneta → fator da largura (0,08 a 1), pela curva escolhida (leve, normal, firme).
  * Mouse e toque: largura cheia. Caneta com pressão 0 (o toque inicial de muitas mesas
  * digitalizadoras): null = ainda desconhecida; o traço usa a primeira pressão que chegar.
- * A curva (expoente 0,7) deixa o traço leve mais fácil de controlar.
  */
-export function pressureOf(e, usePressure) {
+export function pressureOf(e, usePressure, curve = 'normal') {
   if (!usePressure || e.pointerType !== 'pen') return 1;
   if (!(e.pressure > 0)) return null;
-  return 0.12 + 0.88 * Math.pow(Math.min(1, e.pressure), 0.7);
+  return pressureFactor(e.pressure, curve);
 }
 
 /**
@@ -68,7 +68,7 @@ export function ropeStabilizer(rope) {
 /** Comprimento da corda (unidades do desenho) para a suavização de 0 a 100 (até ~22 px na tela). */
 export const ropeLength = (smoothing, scale) => ((Math.max(0, Math.min(100, smoothing)) / 100) * 22) / (scale || 1);
 
-function drawTrail(ctx, pts, color) {
+export function drawTrail(ctx, pts, color) {
   ctx.save();
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
@@ -105,64 +105,106 @@ function drawRing(ctx, stage, radiusPx) {
 }
 
 // ---------- Pincel ----------
-export function brushTool(stage, editor) {
-  let pts = null;
-  let rope = null;
-  let lastW = 1;
-  let pending = 0; // pontos do começo ainda sem pressão conhecida
-  const opts = () => editor.toolOptions.brush;
-  const addPoint = (p, w) => {
-    const last = pts[pts.length - 1];
-    if (last && Math.hypot(p.x - last.x, p.y - last.y) * stage.scale < 1) {
-      if (w != null) last.w = Math.max(last.w ?? 0, w);
-      return;
-    }
-    pts.push({ x: p.x, y: p.y, w });
-  };
-  /** Largura do ponto: pressão suavizada (sem degraus); antes da 1ª pressão, guarda para preencher depois. */
-  const widthAt = (e) => {
-    const pr = pressureOf(e, opts().pressure);
-    if (pr == null) {
-      pending++;
-      return null;
-    }
-    const w = opts().size * pr;
-    lastW = pts.length - pending > 0 ? lastW + (w - lastW) * 0.45 : w;
-    if (pending) {
-      for (const q of pts) if (q.w == null) q.w = lastW;
-      pending = 0;
-    }
+/**
+ * Coletor de amostras da caneta com estabilizador e pressão (lápis e pincel).
+ * Cada amostra: { x, y, w } com w = fator da pressão (0–1) ou null enquanto a caneta não informou.
+ */
+export function strokeSampler(stage, getOpts, getCurve) {
+  let pts = null, rope = null, lastW = null;
+  const factor = (e) => {
+    const pr = pressureOf(e, getOpts().pressure, getCurve());
+    if (pr == null) return null;
+    // suaviza a pressão (sem degraus quando a mesa manda valores ruidosos)
+    lastW = lastW == null ? pr : lastW + (pr - lastW) * 0.45;
     return lastW;
   };
+  return {
+    get points() {
+      return pts;
+    },
+    get rope() {
+      return rope?.point;
+    },
+    start(e) {
+      pts = [];
+      lastW = null;
+      rope = ropeStabilizer(ropeLength(getOpts().smoothing ?? 0, stage.scale));
+      const w = factor(e);
+      const p = rope.push(e.wx, e.wy);
+      pts.push({ x: p.x, y: p.y, w });
+    },
+    add(e) {
+      if (!pts) return;
+      const w = factor(e);
+      const p = rope.push(e.wx, e.wy);
+      if (!p) {
+        // a corda segurou o ponto, mas a pressão vale para o último ponto desenhado
+        const last = pts[pts.length - 1];
+        if (w != null && last.w == null) last.w = w;
+        return;
+      }
+      const last = pts[pts.length - 1];
+      if (Math.hypot(p.x - last.x, p.y - last.y) * stage.scale < 1) {
+        if (w != null) last.w = Math.max(last.w ?? 0, w);
+        return;
+      }
+      pts.push({ x: p.x, y: p.y, w });
+    },
+    finish() {
+      const p = pts;
+      pts = null;
+      return p;
+    },
+  };
+}
+
+export function brushTool(stage, editor) {
+  const opts = () => editor.toolOptions.brush;
+  const curve = () => editor.toolOptions.pen?.curve || 'normal';
+  const sampler = strokeSampler(stage, opts, curve);
+  const px = (v) => (Number(v) || 0) / stage.scale; // opção em pixels da tela → unidades do desenho
   return {
     cursor: 'crosshair',
     coalesced: true,
     down(e) {
       // Alt+clique: pega a cor do que está embaixo (conta-gotas rápido)
       if (e.alt) return pickColor(stage, editor, e, 'fill');
-      pts = [];
-      pending = 0;
-      rope = ropeStabilizer(ropeLength(opts().smoothing, stage.scale));
-      const w = widthAt(e);
-      const p = rope.push(e.wx, e.wy);
-      pts.push({ x: p.x, y: p.y, w });
+      sampler.start(e);
       // o palco fica parado durante o traço: só o rastro é redesenhado (traço sem atraso)
       stage.render();
       stage.freeze();
     },
     move(e) {
-      if (!pts) return;
-      const w = widthAt(e);
-      const p = rope.push(e.wx, e.wy);
-      if (p) addPoint(p, w ?? null);
+      if (!sampler.points) return;
+      sampler.add(e);
       stage.invalidate();
     },
     up() {
-      if (!pts) return;
-      // pressão nunca conhecida (caneta sem pressão): largura cheia
-      const raw = pts.map((q) => ({ ...q, w: q.w ?? opts().size }));
-      pts = null;
+      const samples = sampler.points && sampler.finish();
+      if (!samples) return;
       stage.unfreeze();
+      const o = opts();
+      const color = solidOf(editor.style.fill);
+      const index = o.behind ? 0 : null;
+      if (o.kind !== 'fill') {
+        // linha central editável (como no Moho): pontos que dá para mover e largura por trecho
+        const res = strokeFromSamples(samples, {
+          mode: 'smooth',
+          tolerance: fidelityTolerance(o.fidelity) / stage.scale,
+          taperStart: px(o.taperStart),
+          taperEnd: px(o.taperEnd),
+          closeDist: o.autoClose ? 8 / stage.scale : 0,
+        });
+        if (res) {
+          const el = makeShape({ path: res.path, cx: res.cx, cy: res.cy, fill: null, stroke: color, strokeWidth: o.size });
+          if (res.profile) el.widthProfile = res.profile;
+          editor.addElements([el], 'Pincel', index);
+          return;
+        }
+        // um toque só (sem arrastar): vira um ponto redondo, como a forma preenchida
+      }
+      const ws = finalWidths(samples, px(o.taperStart), px(o.taperEnd));
+      const raw = samples.map((q, i) => ({ x: q.x, y: q.y, w: o.size * ws[i] }));
       let res;
       try {
         res = V.fromPaper(V.cleanOutline(V.strokeOutline(raw), 0.1 / stage.scale));
@@ -171,11 +213,10 @@ export function brushTool(stage, editor) {
         return editor.toast('Não deu para criar este traço. Tente um traço um pouco mais longo ou com o pincel maior.');
       }
       if (!res) return;
-      const s = editor.style;
-      editor.addElements([makeShape({ path: res.path, cx: res.cx, cy: res.cy, fill: s.fill, stroke: null, strokeWidth: 0 })], 'Pincel');
+      editor.addElements([makeShape({ path: res.path, cx: res.cx, cy: res.cy, fill: editor.style.fill, stroke: null, strokeWidth: 0 })], 'Pincel', index);
     },
     cancel() {
-      pts = null;
+      sampler.finish();
       stage.unfreeze();
     },
     hover() {
@@ -183,10 +224,13 @@ export function brushTool(stage, editor) {
       stage.invalidate();
     },
     drawWorld(ctx) {
-      if (pts) drawTrail(ctx, pts.map((q) => ({ ...q, w: q.w ?? opts().size })), solidOf(editor.style.fill));
+      const pts = sampler.points;
+      if (!pts) return;
+      const ws = liveWidths(pts, px(opts().taperStart));
+      drawTrail(ctx, pts.map((q, i) => ({ x: q.x, y: q.y, w: opts().size * ws[i] })), solidOf(editor.style.fill));
     },
     drawScreen(ctx) {
-      if (pts) return drawRope(ctx, stage, rope?.point);
+      if (sampler.points) return drawRope(ctx, stage, sampler.rope);
       drawRing(ctx, stage, (opts().size / 2) * stage.scale);
     },
   };

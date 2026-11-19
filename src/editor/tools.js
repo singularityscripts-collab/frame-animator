@@ -5,7 +5,8 @@ import { motionPropsAt, setKey } from '../player/tween.js';
 import * as C from './commands.js';
 import { clone } from '../model/document.js';
 import { rectPath, ellipsePath, linePath, freehandPath, makeShape, pointsBounds, elementLocalBounds, localBoxCorners } from '../model/geometry.js';
-import { brushTool, eraserTool, bucketTool, eyedropperTool, gradientTool, ropeStabilizer, ropeLength, pickColor, drawRope } from './tools-paint.js';
+import { brushTool, eraserTool, bucketTool, eyedropperTool, gradientTool, pickColor, drawRope, drawTrail, strokeSampler } from './tools-paint.js';
+import { strokeFromSamples, liveWidths, fidelityTolerance } from '../model/stroke.js';
 import { subselectTool, lassoTool, polystarTool, penTool, anchorTool, textTool, warpTool, threeDTool, widthTool, transformTool, rotateViewTool } from './tools-final.js';
 import { boneTool } from './tools-rig.js';
 import { simplify } from '../model/geometry.js';
@@ -503,57 +504,64 @@ function lineTool(stage, editor) {
 
 // ---------- Lápis ----------
 function pencilTool(stage, editor) {
-  let pts = null;
-  let rope = null;
+  const opts = () => editor.toolOptions.pencil;
+  const curve = () => editor.toolOptions.pen?.curve || 'normal';
+  const sampler = strokeSampler(stage, opts, curve);
+  const px = (v) => (Number(v) || 0) / stage.scale;
   return {
     cursor: 'crosshair',
     coalesced: true,
     down(e) {
       // Alt+clique: pega a cor do traço que está embaixo
       if (e.alt) return pickColor(stage, editor, e, 'stroke');
-      rope = ropeStabilizer(ropeLength(editor.toolOptions.pencil?.smoothing ?? 25, stage.scale));
-      const p = rope.push(e.wx, e.wy);
-      pts = [{ x: p.x, y: p.y }];
+      sampler.start(e);
       stage.render();
       stage.freeze();
     },
     move(e) {
-      if (!pts) return;
-      const p = rope.push(e.wx, e.wy);
-      if (p) {
-        const last = pts[pts.length - 1];
-        if (Math.hypot(p.x - last.x, p.y - last.y) * stage.scale >= 1.5) pts.push({ x: p.x, y: p.y });
-      }
+      if (!sampler.points) return;
+      sampler.add(e);
       stage.invalidate();
     },
     up() {
-      if (!pts) return;
-      const p = pts;
-      pts = null;
+      const samples = sampler.points && sampler.finish();
+      if (!samples) return;
       stage.unfreeze();
-      if (p.length < 2) return;
+      if (samples.length < 2) return;
+      const o = opts();
       const s = editor.style;
-      const { path, cx, cy } = pencilPath(p, editor.toolOptions.pencil?.mode || 'smooth', stage.scale);
-      editor.addElements([makeShape({ path, cx, cy, fill: null, stroke: s.stroke, strokeWidth: Math.max(1, s.strokeWidth) })], 'Lápis');
+      const width = Math.max(1, s.strokeWidth);
+      const fillOf = (closed) => (closed && o.autoFill && s.fillOn ? s.fill : null);
+      if (o.mode === 'straighten') {
+        // endireitar: retas e formas reconhecidas, sem pressão
+        const { path, cx, cy } = pencilPath(samples, 'straighten', stage.scale);
+        return editor.addElements([makeShape({ path, cx, cy, fill: fillOf(path.closed), stroke: s.stroke, strokeWidth: width })], 'Lápis');
+      }
+      const res = strokeFromSamples(samples, {
+        mode: o.mode === 'ink' ? 'ink' : 'smooth',
+        tolerance: (o.mode === 'ink' ? 0.35 : fidelityTolerance(o.fidelity)) / stage.scale,
+        taperStart: px(o.taperStart),
+        taperEnd: px(o.taperEnd),
+        closeDist: o.autoClose ? 8 / stage.scale : 0,
+      });
+      if (!res) return;
+      const el = makeShape({ path: res.path, cx: res.cx, cy: res.cy, fill: fillOf(res.closed), stroke: s.stroke, strokeWidth: width });
+      if (res.profile) el.widthProfile = res.profile;
+      editor.addElements([el], 'Lápis');
     },
     cancel() {
-      pts = null;
+      sampler.finish();
       stage.unfreeze();
     },
     drawWorld(ctx) {
+      const pts = sampler.points;
       if (!pts || pts.length < 2) return;
       const s = editor.style;
-      ctx.save();
-      ctx.strokeStyle = s.stroke;
-      ctx.lineWidth = Math.max(1, s.strokeWidth);
-      ctx.lineCap = ctx.lineJoin = 'round';
-      ctx.beginPath();
-      pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
-      ctx.stroke();
-      ctx.restore();
+      const ws = liveWidths(pts, px(opts().taperStart));
+      drawTrail(ctx, pts.map((q, i) => ({ x: q.x, y: q.y, w: Math.max(1, s.strokeWidth) * ws[i] })), s.stroke);
     },
     drawScreen(ctx) {
-      if (pts) drawRope(ctx, stage, rope?.point);
+      if (sampler.points) drawRope(ctx, stage, sampler.rope);
     },
   };
 }

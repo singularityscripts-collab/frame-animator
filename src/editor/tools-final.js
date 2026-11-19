@@ -6,7 +6,9 @@ import { makeShape, pointsBounds, pathBounds } from '../model/geometry.js';
 import { clone } from '../model/document.js';
 import { mlsPoint, subdivideSub } from '../player/mesh.js';
 import { flattenSub, measure, nearestS, pointAt } from '../player/geom.js';
+import { posedAnchors } from '../player/bones.js';
 import * as C from './commands.js';
+import { setCurvature, curvatureOf, splitAtPoints, weldPoints } from './editor-points.js';
 
 const inv = (m) => invert(m) || IDENTITY;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -32,12 +34,72 @@ const subOf = (path, i) => subpaths(path)[i];
 // ---------- Subseleção (A): editar pontos e alças ----------
 export function subselectTool(stage, editor) {
   let st = null;
-  let selected = new Set(); // "elId:sub:pt"
+  let selectedSet = new Set(); // "elId:sub:pt"
+  // a seleção de pontos é avisada (o painel mostra curvatura, soldar e separar)
+  const selection = {
+    set(v) {
+      selectedSet = v;
+      editor.pointSel = v;
+      editor.emit('anchors');
+    },
+  };
+  let selected = selectedSet;
+  const setSel = (v) => {
+    selected = v;
+    selection.set(v);
+  };
+  const touch = () => selection.set(selected);
+  /** Troca ids antigos por novos nas chaves dos pontos (depois de um keyframe criado). */
+  const remapKeys = (map) => {
+    if (!map.size) return;
+    setSel(new Set([...selected].map((k) => {
+      const [id, ...r] = k.split(':');
+      return [map.get(id) || id, ...r].join(':');
+    })));
+  };
+  /** Primeiro arraste de pontos fora do keyframe: auto-key (ou keyframe no meio do tween) e fotografa de novo. */
+  function prepare() {
+    if (st.prepared) return;
+    st.prepared = true;
+    const n0 = editor.history.undoStack.length;
+    const map = editor.prepareShapeEdit(shapes());
+    st.created = editor.history.undoStack.length - n0;
+    if (!map.size) return;
+    remapKeys(map);
+    if (st.a) {
+      const [id, ...r] = st.a.key.split(':');
+      const key = [map.get(id) || id, ...r].join(':');
+      st.a = anchors().find((x) => x.key === key) || st.a;
+    }
+    st.snap = editor.beginLiveEdit(shapes());
+    st.orig = origPaths();
+    st.screen = anchorScreens();
+    st.Ms = skinMs();
+  }
+  /** Posição original na tela de cada ponto (para o ímã). */
+  function anchorScreens() {
+    return new Map(anchors().map((a) => [a.key, a.s]));
+  }
 
   const shapes = () => editor.selectedItems().filter((it) => it.el.type === 'shape' && !it.motion);
+  /** Forma dobrada por ossos: o caminho mostrado não é o guardado (pontos a mais na pose). */
+  const skinned = (it) => !!it.src && it.src.type === 'shape' && it.el.path !== it.src.path;
+  /** Caminhos de partida do arraste (o guardado, nas formas com pele) e a matriz da pele em cada ponto. */
+  const origPaths = () => new Map(shapes().map((it) => [it.el.id, clone(skinned(it) ? it.src.path : it.el.path)]));
+  const skinMs = () => new Map(anchors().filter((a) => a.M).map((a) => [a.key, a.M]));
   function anchors() {
     const out = [];
     for (const it of shapes()) {
+      if (skinned(it)) {
+        // forma com pele: os pontos são os do desenho original, na posição da pose
+        const info = editor.poseAt(it.layer);
+        const pa = info && posedAnchors(it.src, info.arm, info.pose);
+        for (const a of pa?.anchors || []) {
+          const w = applyPoint(it.wm, a.x, a.y);
+          out.push({ it, si: a.si, pi: a.pi, key: `${it.el.id}:${a.si}:${a.pi}`, s: stage.toScreen(w.x, w.y), hi: null, ho: null, M: a.M });
+        }
+        continue;
+      }
       subpaths(it.el.path).forEach((sp, si) => {
         sp.pts.forEach((q, pi) => {
           const w = applyPoint(it.wm, q[0], q[1]);
@@ -62,16 +124,18 @@ export function subselectTool(stage, editor) {
         if (!selected.has(a.key)) continue;
         for (const which of ['hi', 'ho']) {
           if (a[which] && Math.hypot(a[which].x - e.sx, a[which].y - e.sy) <= 6) {
-            st = { mode: 'handle', a, which, snap: editor.beginLiveEdit(shapes()), orig: new Map(shapes().map((it) => [it.el.id, clone(it.el.path)])), alt: e.alt };
+            st = { mode: 'handle', a, which, snap: editor.beginLiveEdit(shapes()), orig: origPaths(), alt: e.alt };
             return;
           }
         }
       }
       const hitA = as.find((a) => Math.hypot(a.s.x - e.sx, a.s.y - e.sy) <= 6);
       if (hitA) {
-        if (e.shift) selected.has(hitA.key) ? selected.delete(hitA.key) : selected.add(hitA.key);
-        else if (!selected.has(hitA.key)) selected = new Set([hitA.key]);
-        st = { mode: 'anchors', start: e, snap: editor.beginLiveEdit(shapes()), orig: new Map(shapes().map((it) => [it.el.id, clone(it.el.path)])) };
+        if (e.shift) {
+          selected.has(hitA.key) ? selected.delete(hitA.key) : selected.add(hitA.key);
+          touch();
+        } else if (!selected.has(hitA.key)) setSel(new Set([hitA.key]));
+        st = { mode: 'anchors', start: e, snap: editor.beginLiveEdit(shapes()), orig: origPaths(), screen: anchorScreens(), Ms: skinMs() };
         stage.invalidate();
         return;
       }
@@ -79,11 +143,11 @@ export function subselectTool(stage, editor) {
       if (hit?.el.type === 'shape') {
         if (!editor.selection.has(hit.el.id)) {
           editor.setSelection(e.shift ? [...editor.selection, hit.el.id] : [hit.el.id]);
-          selected = new Set();
+          setSel(new Set());
         }
         return;
       }
-      if (!e.shift) selected = new Set();
+      if (!e.shift) setSel(new Set());
       st = { mode: 'marquee', start: e, cur: e };
       stage.invalidate();
     },
@@ -94,6 +158,9 @@ export function subselectTool(stage, editor) {
         stage.invalidate();
         return;
       }
+      prepare();
+      const magnet = st.mode === 'anchors' ? (Number(editor.toolOptions.subselect?.magnet) || 0) : 0;
+      const selScreens = magnet ? [...selected].map((k) => st.screen.get(k)).filter(Boolean) : [];
       for (const it of shapes()) {
         const orig = st.orig.get(it.el.id);
         if (!orig) continue;
@@ -101,14 +168,37 @@ export function subselectTool(stage, editor) {
         const im = inv(it.wm);
         if (st.mode === 'anchors') {
           const a = applyPoint(im, st.start.wx, st.start.wy), b = applyPoint(im, e.wx, e.wy);
-          const dx = b.x - a.x, dy = b.y - a.y;
+          let dx = b.x - a.x, dy = b.y - a.y;
+          const skin = skinned(it);
           subpaths(path).forEach((sp, si) =>
             sp.pts.forEach((q, pi) => {
-              if (!selected.has(`${it.el.id}:${si}:${pi}`)) return;
-              q[0] += dx;
-              q[1] += dy;
+              const key = `${it.el.id}:${si}:${pi}`;
+              let w = selected.has(key) ? 1 : 0;
+              if (!w && magnet) {
+                // ímã: os pontos perto dos arrastados vão junto, cada vez menos com a distância
+                const s0 = st.screen.get(key);
+                if (s0) {
+                  const d = Math.min(...selScreens.map((o) => Math.hypot(o.x - s0.x, o.y - s0.y)));
+                  if (d < magnet) w = (1 - (d / magnet) ** 2) ** 2;
+                }
+              }
+              if (!w) return;
+              let mx = dx, my = dy;
+              const M = skin && st.Ms?.get(key);
+              if (M) {
+                // na pose → no desenho guardado: desfaz a parte linear da pele naquele ponto
+                const r = applyPoint(inv([M[0], M[1], M[2], M[3], 0, 0]), dx, dy);
+                mx = r.x;
+                my = r.y;
+              }
+              q[0] += mx * w;
+              q[1] += my * w;
             }),
           );
+          if (skin) {
+            it.src.path = path;
+            continue;
+          }
         } else if (it.el.id === st.a.it.el.id) {
           const q = subOf(path, st.a.si).pts[st.a.pi];
           const p = applyPoint(im, e.wx, e.wy);
@@ -143,10 +233,15 @@ export function subselectTool(stage, editor) {
           { x: e.sx, y: e.sy },
         ]);
         for (const a of anchors()) if (a.s.x >= r.x && a.s.x <= r.x + r.w && a.s.y >= r.y && a.s.y <= r.y + r.h) selected.add(a.key);
+        touch();
         stage.invalidate();
         return;
       }
-      editor.endLiveEdit(s.mode === 'handle' ? 'Mover alça' : 'Mover pontos', s.snap);
+      const label = s.mode === 'handle' ? 'Mover alça' : 'Mover pontos';
+      const n0 = editor.history.undoStack.length;
+      editor.endLiveEdit(label, s.snap);
+      // keyframe criado pelo auto-key + a edição = um passo só de desfazer
+      if (s.created && editor.history.undoStack.length > n0) editor.history.squash(s.created + 1, label);
     },
     cancel() {
       if (st?.snap) editor.cancelLiveEdit(st.snap);
@@ -168,7 +263,7 @@ export function subselectTool(stage, editor) {
         }
         el.path = subs.length === 1 ? subs[0] : { ...path, subs };
       });
-      selected = new Set();
+      setSel(new Set());
       // formas vazias saem
       const empty = editor.selectedItems().filter((it) => it.el.type === 'shape' && !subpaths(it.el.path).some((sp) => sp.pts.length));
       if (empty.length) {
@@ -177,12 +272,47 @@ export function subselectTool(stage, editor) {
       }
       return true;
     },
+    /** Curvatura dos pontos selecionados (0 pontudo, 100 suave). */
+    setCurvature(v) {
+      if (!selected.size) return editor.toast('Selecione pontos com a Subseleção (A).');
+      const r = editor.editPoints(v <= 0 ? 'Ponto pontudo' : 'Curvatura dos pontos', selected, (path, pts) => setCurvature(path, pts, v));
+      remapKeys(r.map);
+    },
+    /** Curvatura do primeiro ponto selecionado (para o painel). */
+    curvature() {
+      const k = [...selected][0];
+      if (!k) return null;
+      const [id, si, pi] = k.split(':');
+      const it = shapes().find((x) => x.el.id === id);
+      return it ? curvatureOf(it.el.path, +si, +pi) : null;
+    },
+    /** Separa a forma nos pontos selecionados. */
+    split() {
+      if (!selected.size) return editor.toast('Selecione o ponto onde separar.');
+      const r = editor.editPoints('Separar pontos', selected, (path, pts) => splitAtPoints(path, pts));
+      if (r.ok) setSel(new Set());
+    },
+    /** Solda duas pontas selecionadas da mesma forma. */
+    weld() {
+      const byEl = new Map();
+      for (const k of selected) {
+        const [id, si, pi] = k.split(':');
+        if (!byEl.has(id)) byEl.set(id, []);
+        byEl.get(id).push({ si: +si, pi: +pi });
+      }
+      const pair = [...byEl.values()].find((v) => v.length === 2);
+      if (byEl.size !== 1 || !pair) return editor.toast('Selecione duas pontas de linha (começo ou fim) na mesma forma para soldar.');
+      const r = editor.editPoints('Soldar pontos', selected, (path) => weldPoints(path, pair));
+      if (!r.ok) return editor.toast('Só dá para soldar pontas de linhas abertas (o primeiro ou o último ponto).');
+      setSel(new Set());
+    },
     hover(e) {
       const a = anchors().find((x) => Math.hypot(x.s.x - e.sx, x.s.y - e.sy) <= 6);
       stage.setCursor(a ? 'move' : 'default');
     },
     drawScreen(ctx) {
       const as = anchors();
+      drawPointPaths(ctx, stage, editor, as.filter((a) => selected.has(a.key)));
       ctx.save();
       for (const it of shapes()) {
         // contorno do caminho
@@ -223,7 +353,58 @@ export function subselectTool(stage, editor) {
       ctx.restore();
     },
   };
+  editor.subselectTool = tool;
   return tool;
+}
+
+/**
+ * Caminho de cada ponto selecionado entre os keyframes do tween em volta do quadro (como o onion
+ * de contorno do Moho): bolinhas por quadro, maiores nas chaves.
+ */
+function drawPointPaths(ctx, stage, editor, sel) {
+  if (!sel.length || editor.player.playing) return;
+  const tl = editor.timeline;
+  ctx.save();
+  for (const a of sel.slice(0, 40)) {
+    const it = a.it;
+    const layer = it.layer;
+    const si = layer.frames.indexOf(it.span);
+    if (si < 0) continue;
+    // trecho com tween que passa pelo quadro; se o quadro é a chave, também o tween que chega nele
+    const ranges = [];
+    const cur = layer.frames[si];
+    if (cur.tween?.type === 'shape' && layer.frames[si + 1]) ranges.push([cur.start, layer.frames[si + 1].start]);
+    const prev = layer.frames[si - 1];
+    if (cur.start === editor.frame && prev?.tween?.type === 'shape') ranges.push([prev.start, cur.start]);
+    if (!ranges.length) continue;
+    const [, sIdx, pIdx] = a.key.split(':').map(Number);
+    for (const [f0, f1] of ranges) {
+      const pts = [];
+      for (let f = f0; f <= f1; f++) {
+        const lf = layerFrame(layer, f, tl);
+        const el = lf?.items[it.index]?.el;
+        const q = el && subpaths(el.path)[sIdx]?.pts[pIdx];
+        if (!q) continue;
+        const w = applyPoint(multiply(it.lm || IDENTITY, el.matrix), q[0], q[1]);
+        pts.push({ ...stage.toScreen(w.x, w.y), key: f === f0 || f === f1, cur: f === editor.frame });
+      }
+      if (pts.length < 2) continue;
+      ctx.strokeStyle = 'rgba(255, 140, 60, 0.75)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (const p of pts) {
+        ctx.fillStyle = p.key ? '#ff8c3c' : 'rgba(255, 140, 60, 0.8)';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.key ? 3.5 : 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
 }
 
 /** Caminho → texto SVG (para desenhar contornos de ajuda). */

@@ -21,9 +21,11 @@ Objetivo: deixar as funções que já existem fáceis, previsíveis e gostosas d
 | 1 | Rigging | **pronta** |
 | 2 | Desenho e seleção | **pronta** |
 | 3 | Timeline e animação | **pronta** |
-| 4 | Interface e atalhos (+ atualização automática e instalador novo) | **pronta** (esperando "próxima etapa") |
-| 5 | Desempenho e estabilidade | pendente |
-| 6 | Polimento visual | pendente |
+| 4 | Interface e atalhos (+ atualização automática e instalador novo) | **pronta** |
+| 5 | Desempenho e estabilidade | movida para a Parte 2 (V8) |
+| 6 | Polimento visual | movida para a Parte 2 (V9) |
+
+**Parte 2 em andamento:** o app inteiro no nível do Moho. As etapas V1–V9 e o status estão mais abaixo, em "Parte 2".
 
 **Falta do usuário:** a seção "O que mais me incomoda hoje" do pedido veio com os campos em branco ("[descreva o que acontece]"). Os problemas que você descrever entram no topo da etapa certa.
 
@@ -425,6 +427,358 @@ Todos os itens R1–R12 abaixo foram resolvidos. Arquivos novos:
 
 ---
 
+# Parte 2 — O app inteiro no nível do Moho
+
+Pedido de 18/11/2026:
+- consertar a mesa digitalizadora (só dava para fazer riscos curtos);
+- refinar o app inteiro, com foco na animação vetorial, até o nível de programas grandes como o Moho;
+- dividir o trabalho em etapas.
+
+Valem as mesmas regras da Parte 1, com uma diferença: **aqui podem entrar funções novas** quando forem o que falta para chegar ao nível do Moho. As Etapas 5 (desempenho) e 6 (polimento visual) da Parte 1 ficam no fim desta parte. Assim, a medição e o acabamento já cobrem as funções novas.
+
+| Etapa | Tema | Status |
+|---|---|---|
+| V1 | Mesa digitalizadora | **pronta** |
+| V2 | Traço vetorial de verdade | **pronta** |
+| V3 | Animação ponto a ponto | **pronta** |
+| V4 | Ossos no nível do Moho | **pronta** |
+| V5 | Canais, curvas e interpolação | **pronta** (esperando "próxima etapa") |
+| V6 | Troca de desenhos, boca e reaproveitamento | pendente |
+| V7 | Câmera, cena e exportação | pendente |
+| V8 | Desempenho e estabilidade (era a Etapa 5) | pendente |
+| V9 | Polimento visual (era a Etapa 6) | pendente |
+
+## Etapa V1: Mesa digitalizadora (pronta)
+
+### Causa do risco curto
+
+O palco não dizia ao Windows que a caneta serve para desenhar (faltava `touch-action: none`). Por isso o Windows tratava o arraste da caneta como gesto de rolar a página e, depois de poucos pixels, cancelava o ponteiro. Esse cancelamento encerrava o traço.
+
+A caneta simulada da Etapa 2 não pegou o problema, porque eventos sintéticos não passam pelo reconhecedor de gestos do Windows.
+
+### O que foi feito
+
+- O palco e as outras áreas de arrastar não viram mais gesto com caneta ou toque. Isso vale para a timeline, a régua, o divisor da timeline, as janelas e os divisores dos painéis, as barras de cor e o scrub dos campos numéricos.
+- Se o sistema cancelar a caneta mesmo assim (por exemplo, quando uma janela abre por cima), o traço fecha e é salvo como se a caneta tivesse sido levantada. O desenho não se perde.
+- **Rejeição da palma:** durante um traço, só conta o ponteiro que começou. A palma ou um dedo encostando na tela não entra no traço nem o encerra.
+- **Ponta de borracha da caneta:** virar a caneta e apagar usa a Borracha sem trocar de ferramenta. Ao voltar para a ponta normal, a ferramenta de antes continua ativa.
+
+### Como testar
+
+1. Pincel (B) com a caneta: faça traços longos e lentos, e traços rápidos e longos. O traço inteiro deve ficar, com a pressão variando a largura.
+2. Apoie a mão na tela, se ela for sensível ao toque, enquanto desenha. O traço não deve ser cortado.
+3. Vire a caneta e apague com a ponta de trás.
+4. Arraste keyframes na timeline e o divisor dos painéis com a caneta.
+
+### Testado
+
+- **Caneta simulada no navegador interno:**
+  - traço de 120 pontos com pressão variando: saiu inteiro, com cerca de 480 px de comprimento na tela;
+  - toque de "palma" no meio do traço: foi ignorado;
+  - cancelamento: o traço foi salvo;
+  - ponta de borracha: apagou com o Pincel ainda ativo.
+- `touch-action: none` conferido no palco, nos quadros, na régua, no divisor e nos campos.
+
+### Pendências da etapa
+
+- **Sem mesa física:** não tive uma mesa física para testar. Falta você conferir na sua (Wacom, Huion, XP-Pen ou tela com caneta).
+- **Driver Wacom:** se o driver estiver com "Windows Ink" desligado, a caneta age como mouse, sem pressão. Ligue o Windows Ink nas propriedades da mesa.
+- **Lápis sem pressão:** o lápis ainda não usa pressão. Isso entra na V2, junto com o traço de largura variável.
+
+## Etapa V2: Traço vetorial de verdade (pronta)
+
+### O que foi feito
+
+- **Linha central com largura por trecho (como no Moho)**
+  - O pincel agora tem dois tipos:
+    - **Linha editável** (o novo padrão): o traço vira uma linha com pontos e um perfil de largura tirado da pressão da caneta;
+    - **Forma preenchida**: o contorno do traço, como antes.
+  - Na linha editável:
+    - os pontos se movem com a Subseleção (A);
+    - a largura de cada trecho muda com a ferramenta Largura (U);
+    - a cor muda como a de qualquer linha.
+  - O lápis também grava a pressão, com a espessura do traço como largura máxima. O modo Endireitar continua sem pressão.
+  - O perfil fica enxuto, com só os pontos necessários (cerca de 10 a 15 num traço comum).
+- **Curva de pressão**
+  - Leve, Normal ou Firme, com uma prévia da curva no painel.
+  - Vale para o lápis e o pincel.
+  - A largura mínima ficou mais fina (8%) para traços delicados.
+- **Afinar o começo e o fim**
+  - O comprimento de cada ponta é dado em pixels da tela.
+  - A ponta do começo já aparece afinada enquanto você desenha.
+  - Num traço curto, o afinar não passa de 45% de cada lado.
+  - O afinar funciona com mouse também.
+- **Fidelidade**
+  - Controla quantos pontos o traço guarda: baixa dá curvas limpas com poucos pontos, alta segue cada detalhe.
+  - Funciona junto com o estabilizador.
+- **Pontas redondas:** linhas de largura variável (inclusive as da ferramenta Largura) têm pontas redondas, iguais às linhas comuns. Isso vale no palco e na exportação.
+- **Fechar ao voltar ao começo:** terminar o traço perto de onde começou fecha a forma, no lápis e no pincel. No lápis, "Preencher formas fechadas" pinta o interior com a cor de preenchimento.
+- **Pintar por trás do que já existe:** o traço do pincel entra embaixo de tudo na camada, como o "pintar atrás" do Animate e do Harmony. O balde já fazia isso.
+- **Borracha em linhas de largura variável:** cada pedaço que sobra mantém a largura que tinha naquele trecho. Antes, o perfil escorregava para o pedaço errado.
+- **Selecionar mesma cor:** fica no menu de clique direito sobre uma forma e em Editar. Seleciona no quadro as formas com o mesmo preenchimento (ou a mesma cor de linha, se a forma não tem preenchimento).
+- **As opções das ferramentas são lembradas entre sessões:** curva de pressão, afinar, tamanho e outras.
+- **Desempenho:** a largura num ponto do traço é achada por busca binária, sem reordenar o perfil a cada ponto.
+
+### Como testar
+
+1. Pincel (B), Tipo "Linha editável". Desenhe com a caneta variando a pressão: a largura acompanha.
+2. Aperte A e mova um ponto do traço: a largura acompanha a linha.
+3. Aperte U e engrosse um trecho.
+4. Ponha "Afinar o começo" em 20 e "Afinar o fim" em 40, e desenhe de novo.
+5. Mude a curva de pressão para Leve e para Firme e compare.
+6. Lápis (Y) com "Preencher formas fechadas": desenhe um círculo voltando ao começo.
+7. Pincel com "Pintar por trás do que já existe": risque por cima de um retângulo. O traço fica embaixo dele.
+8. Borracha atravessando uma linha de largura variável: os dois pedaços mantêm a largura.
+
+### Testado
+
+- 110 testes passando (9 novos em `test/stroke.test.js`), mais `npm run check` e `npm run smoke` (Electron).
+- No app:
+  - traços com caneta simulada (pressão em rampa e em arco);
+  - traço com mouse e pontas afinadas;
+  - círculo do lápis fechado e preenchido;
+  - pincel por trás de um retângulo;
+  - borracha cortando uma linha com perfil;
+  - desfazer;
+  - troca da curva de pressão, guardada após recarregar.
+
+### Pendências da etapa
+
+- **Borracha e espessura:** a borracha corta a linha onde encosta no **centro** dela. Para apagar só a borda de uma linha muito grossa, use "Forma preenchida".
+- **Gradiente na linha editável:** o pincel usa a cor sólida do preenchimento. Para pintar com gradiente, use "Forma preenchida".
+- **Balde em várias camadas** (fechar vãos olhando as linhas de outras camadas) ficou para a V8, junto com o desempenho, porque precisa renderizar as camadas juntas.
+- **Travar preenchimento** (gradiente contínuo entre formas) não entrou. É raro em animação e pode voltar na V9 se fizer falta.
+- **Mesa física:** a curva de pressão foi testada só com caneta simulada.
+
+## Etapa V3: Animação ponto a ponto (pronta)
+
+### O que foi feito
+
+- **Tween que liga ponto a ponto**
+  - Quando as duas chaves são do mesmo desenho (uma é cópia da outra) e têm a mesma estrutura de pontos, o shape tween leva cada ponto ao seu par, com as alças. A forma não "derrete" e não é reamostrada. Isso vale para chaves feitas com F6, auto-key, keyframe de pose ou colar quadros.
+  - Também interpolam:
+    - o preenchimento e a cor e espessura da linha;
+    - o perfil de largura da V2.
+  - Com a mesma matriz nas duas chaves, o tween fica no espaço da forma. Com matrizes diferentes, é feito no espaço do palco.
+  - Desenhos diferentes (quadrado → círculo) continuam no morph de antes, assim como chaves com dicas de forma.
+  - A cópia guarda de qual desenho veio (`lineage`), então o documento continua JSON comum. Arquivos antigos seguem como antes até a próxima chave criada.
+- **Auto-key de pontos**
+  - Com a Subseleção (A), mover pontos num quadro sem keyframe cria a chave ali.
+  - Se a chave anterior só tinha formas e estava sem tween, ela ganha um shape tween sozinha, como no Moho.
+  - O auto-key é o mesmo dos ossos: um interruptor só.
+  - "Chave criada + pontos movidos" é um passo só de desfazer.
+  - Sem auto-key, editar no meio de um tween cria a chave naquele quadro. **Correção:** antes, a forma interpolada ia parar na chave de origem.
+- **Ímã:** com raio em px na tela, os pontos perto dos arrastados vão junto, cada vez menos quanto mais longe.
+- **Curvatura por ponto**
+  - Slider de 0 (pontudo) a 200 (bem redondo), mais os botões Pontudo e Suave.
+  - As alças seguem a direção dos vizinhos.
+  - O painel mostra a curvatura atual do ponto.
+- **Separar e soldar**
+  - Separar num ponto parte a linha em duas, ou abre uma forma fechada ali.
+  - Soldar duas pontas fecha o laço, se forem do mesmo caminho, ou junta dois pedaços num só.
+- **Caminho dos pontos:** cada ponto selecionado mostra uma linha laranja com uma bolinha por quadro (maiores nas chaves), entre as chaves do tween em volta do quadro.
+- **Esconder forma neste quadro**
+  - A forma some do quadro sem ser apagada e continua ligada no tween.
+  - Esconder vale como degrau: vale o estado da chave de onde o tween sai.
+  - Na camada ativa, a forma escondida aparece tracejada para dar para achar e mostrar de novo.
+  - Não aparece no player nem na exportação.
+- **Onde ficam os comandos:**
+  - seção "Pontos" no painel enquanto a Subseleção está ativa: auto-key, ímã, curvatura, Pontudo, Suave, Separar, Soldar e Esconder/mostrar;
+  - menu de clique direito;
+  - ações com nome, para atalhos personalizados.
+
+### Como testar
+
+1. Desenhe um retângulo e estenda a camada até o quadro 24 (F5).
+2. Vá ao quadro 13, aperte A, clique na forma e arraste um canto. Aparece uma chave no 13 e um tween verde de 1 a 13.
+3. Volte ao quadro 7: o canto está no meio do caminho, e a forma continua com 4 pontos.
+4. Clique no canto: a linha laranja mostra o caminho dele. Aperte "Suave" e veja a curva.
+5. Ponha o ímã em 200 e arraste outro canto no quadro 19: os vizinhos vão junto.
+6. No quadro 24, "Esconder / mostrar forma neste quadro": a forma some e fica tracejada.
+7. Ctrl+Z desfaz cada passo, incluindo a chave criada pelo auto-key.
+
+### Testado
+
+- 120 testes passando (10 novos em `test/points.test.js`), mais `npm run check` e `npm run smoke` (Electron).
+- No app, com mouse:
+  - retângulo animado pelo canto com auto-key;
+  - conferido o ponto exato no meio do tween;
+  - caminho laranja, curvatura suave e ímã no quadro 19, com a chave e o tween criados sozinhos;
+  - forma escondida no último quadro.
+
+### Pendências da etapa
+
+- **Copiar e colar elementos** (Ctrl+C / Ctrl+V de formas) não marca a origem. Só F6, auto-key e colar **quadros** marcam. Para animar pontos, copie o keyframe.
+- **Ordem dos elementos:** o tween liga a forma N de uma chave com a forma N da outra. Mudar a ordem numa chave só (trazer para a frente) troca os pares. O mesmo vale para o tween clássico.
+- **Ímã:** age só nas formas selecionadas, não nas outras formas da camada.
+
+## Etapa V4: Ossos no nível do Moho (pronta)
+
+### O que foi feito
+
+- **Smart Bones (correções por ângulo)**
+  - Como criar:
+    1. Em Posar, gire um osso (por exemplo, o cotovelo a 90°).
+    2. Selecione o osso e aperte "Nova correção neste ângulo".
+    3. Os pontos da forma ficam amarelos: arraste-os para corrigir a forma (o cotovelo que amassa, a cabeça que vira).
+  - O ajuste entra aos poucos conforme o osso gira e fica inteiro no ângulo da correção.
+  - Com várias correções do mesmo lado (45° e 90°), o ajuste mistura as duas. Passando da última, segura a última. O outro lado do giro só usa as correções de lá.
+  - Uma etiqueta no palco mostra o ângulo e o peso atual da correção. No painel, a lista mostra quantos pontos cada correção move, com Editar e Apagar.
+  - O ajuste é gravado no espaço da forma em descanso, então segue a pele e funciona em qualquer pose. Vale no player e na exportação.
+- **Peso suave entre ossos**
+  - **Força do osso** (0,1 a 5): o osso puxa uma área maior ou menor da pele.
+  - Em Editar rig, com um osso selecionado, bolinhas na cor dele mostram em cada ponto da forma o quanto aquele ponto segue o osso.
+- **Pontos presos a um osso** (o "bind points" do Moho)
+  - Com a Subseleção (A), selecione pontos. Na seção Pontos, "Prender pontos" faz eles seguirem só o osso escolhido, e "Soltar pontos" desfaz.
+  - Os trechos entre um ponto preso e um solto fazem a transição suave.
+  - Apagar o osso passa os pontos para o osso pai.
+- **Dinâmica**
+  - "Dinâmica: balança sozinho" no osso, com rigidez, amortecimento e gravidade.
+  - Cabelo, rabo e orelha atrasam e balançam quando o corpo anda.
+  - A simulação é quadro a quadro e sempre dá o mesmo resultado, igual no editor, no player e no HTML5. Ela é refeita sozinha quando a camada muda.
+- **Biblioteca de poses**
+  - Em Posar: "Guardar pose atual" e uma lista com Aplicar e Apagar (apagar usa o botão ×).
+  - Aplicar cria a chave com o auto-key. A biblioteca vale para a camada toda.
+- **Subseleção em arte com pele:** os pontos mostrados são os do desenho original, na posição da pose. Mover um ponto edita o desenho guardado, com a dobra desfeita naquele ponto, e não cria chave. Antes, a forma dobrada mostrava pontos que não existiam no desenho.
+- **Correção de bug:** F6 numa camada com ossos (no meio de um trecho ou depois do fim) criava a chave nova sem o esqueleto. Agora ela leva os ossos e a pose do quadro.
+- **Arquitetura:** o resto do esqueleto (correções e biblioteca de poses) fica guardado igual em todos os keyframes da camada. Toda edição de rig passa por `editRig` e tem desfazer.
+
+### Como testar
+
+1. Desenhe um retângulo comprido. Na ferramenta Ossos (Editar rig), faça dois ossos dentro dele: ombro e antebraço.
+2. Selecione o antebraço: as bolinhas verdes mostram os pontos que ele puxa. Mude a Força e veja a área mudar.
+3. Em Posar, dobre o antebraço a 90°, aperte "Nova correção neste ângulo" e arraste um ponto amarelo. "Concluir correção".
+4. Gire o antebraço para 45°: a correção aparece pela metade.
+5. Aperte "Guardar pose atual", vá a outro quadro, mude a pose e aplique a guardada.
+6. Faça um osso de rabo, ligue a Dinâmica, anime o corpo andando e toque (Enter).
+
+### Testado
+
+- 127 testes passando (7 novos em `test/rig2.test.js`, incluindo o F6 com esqueleto), mais `npm run check` e `npm run smoke` (Electron).
+- No app:
+  - braço com dois ossos;
+  - pesos na cor do osso;
+  - correção criada a 90° pelo painel e ponto arrastado (o deslocamento gravado bate com o giro do osso);
+  - pose guardada e aplicada no quadro 21 com auto-key;
+  - dinâmica ligada pelo painel, com o balanço amortecido medido quadro a quadro.
+
+### Pendências da etapa
+
+- **Correção que gira outros ossos:** no Moho, o Smart Bone também pode girar outros ossos. Aqui ele move só os pontos das formas.
+- **Pintura de peso com pincel:** não entrou. O peso vem da Força do osso e de prender pontos.
+- **Ossos de controle:** não entraram, nem o alvo de IK separado, nem o "flip" de mão. Pinos e limites continuam sendo o jeito de controlar.
+- **Dinâmica no esqueleto do editor:** o esqueleto mostra a pose com keys, e a arte mostra o balanço. Assim o IK continua editando as chaves.
+
+## Etapa V5: Canais, curvas e interpolação (pronta)
+
+### O que foi feito
+
+- **Interpolação por chave**
+  - O clique direito no keyframe (ou no intervalo) tem "Interpolação ▸" com estas opções:
+    - ● suave
+    - ◆ linear
+    - ◐ acelerar
+    - ◑ desacelerar
+    - ■ degrau (segura até a próxima chave)
+    - ▲ passar do ponto, elástico e quicar
+  - Cria o tween que faltar:
+    - **tween clássico** quando só posição, giro ou escala mudam;
+    - **shape tween** quando os pontos mudam.
+  - Na timeline, o keyframe com tween mostra o símbolo da interpolação (○ = curva própria). Também há ações com nome para atalhos personalizados.
+- **Canais**
+  - O ▸ ao lado da camada (ou "Abrir canais" no menu dela) abre uma linha por propriedade:
+    - Transformação, Pontos, Cor e Esconder;
+    - um canal por osso e a Raiz;
+    - cada propriedade de motion tween;
+    - os modificadores.
+  - Cada canal mostra só as chaves em que aquela propriedade muda, com o símbolo da interpolação.
+  - Clicar num canal leva ao quadro. Nas keys de motion tween, arrastar muda o quadro da key.
+- **Editor de curvas**
+  - As outras propriedades aparecem por trás, cada uma na sua cor.
+  - **Normalizar** põe todas na mesma altura, para comparar o tempo (e continua editável).
+  - Zoom com a roda do mouse (Shift: no valor) e **Ajustar à tela** (tecla F).
+  - **Copiar e colar curva** funciona entre propriedades e entre tweens.
+- **Modificadores (sem criar chaves)**
+  - **Ruído**: a camada treme (posição, giro e escala, com lentidão e semente). O ruído é sempre o mesmo e aparece no palco, ao tocar e na exportação.
+  - **Ciclo**: menu do quadro › "Ciclo ▸": depois do fim, os quadros selecionados se repetem ou vão e voltam (ping-pong).
+  - Ruído e ciclo aparecem como faixa na linha de canais e saem pelo menu da camada.
+  - A edição continua nos quadros de verdade (o ruído não é gravado na arte).
+- **Esticar ou encolher**: com quadros selecionados, "Esticar ou encolher ▸" oferece 200%, 150%, 75%, 50% ou uma duração exata.
+  - As chaves de dentro ficam proporcionais, o resto da camada anda junto, e as keys de motion tween acompanham.
+  - Encolhendo demais, chaves que caem no mesmo quadro ficam só com a primeira.
+  - É um passo de desfazer.
+- **Marcadores na régua**
+  - Clique direito na régua › "Marcador no quadro…" cria uma bandeirinha com nome.
+  - Arrastar move o marcador, duplo clique renomeia, e o clique direito apaga ou vai ao anterior ou ao próximo.
+  - Os marcadores ficam na cena (ou no símbolo) e têm desfazer.
+
+### Como testar
+
+1. Anime uma bola com 3 keyframes (1, 13 e 24).
+2. Selecione os quadros e, no clique direito, escolha "Interpolação ▸ Suave": a bola sai e chega devagar.
+3. Clique no ▸ ao lado da camada: aparece a linha "Transformação" com as chaves.
+4. Clique direito na régua: crie o marcador "quica" no quadro 13 e arraste-o.
+5. No menu da camada, use "Adicionar ruído (tremer)…" e toque.
+6. Selecione 1–12 e use "Esticar ou encolher ▸ 200%".
+
+### Testado
+
+- 135 testes passando (8 novos em `test/channels.test.js`), mais `npm run check` e `npm run smoke` (Electron).
+- No app:
+  - bola com 3 chaves, interpolação Suave pelo submenu (tween clássico com o easing certo);
+  - linha de canal com os símbolos;
+  - marcador na régua;
+  - ruído pelo diálogo, aparecendo como faixa no canal;
+  - editor de curvas com 3 propriedades normalizadas e a curva copiada de "Posição X" para "Rotação".
+
+### Pendências da etapa
+
+- **Arrastar chaves num canal:** só as keys de **motion tween** mudam de quadro direto no canal. As outras (posição, pontos, ossos) são keyframes da camada inteira: arraste na linha da camada.
+- **Ruído nas propriedades:** o ruído vale para a camada inteira, não para uma propriedade de um elemento só.
+- **Ciclo:** repete o que a camada mostra. Para ver o ciclo, a camada (ou a cena) precisa ter quadros depois do fim do trecho (F5).
+
+## Etapa V6: Troca de desenhos, boca e reaproveitamento
+
+- **Camada de troca (Switch):** guarda desenhos alternativos (bocas, mãos, olhos) e a timeline escolhe qual aparece. Funciona com ossos e com troca rápida no palco.
+- **Lip sync:** o `lipsync.js` já existe. A etapa liga o lip sync à camada de troca, com o som visível na timeline e ajuste fino por fonema.
+- **Biblioteca de personagens:** rig + desenhos + ações num pacote reaproveitável entre arquivos.
+- **Ações nomeadas:** ciclo de andar, piscar e respirar como clipes reaproveitáveis, inseridos na timeline e misturados.
+
+## Etapa V7: Câmera, cena e exportação
+
+- **Câmera:** câmera com profundidade (paralaxe por camada), tremida, zoom e enquadramento seguro, além de guia de enquadramento na tela.
+- **Camadas:**
+  - pais entre camadas (uma camada segue outra);
+  - máscaras mais simples;
+  - desfoque de movimento;
+  - modos de mistura.
+- **Exportação:**
+  - vídeo com som;
+  - sequência PNG com transparência;
+  - GIF;
+  - HTML5 do player;
+  - fila de exportação com prévia.
+
+## Etapa V8: Desempenho e estabilidade
+
+É a antiga Etapa 5 (achados P1–P4), agora medida também com as funções novas:
+- 60 fps com 20 camadas × 300 quadros e um rig com smart bones e dinâmica;
+- desfazer agrupado;
+- autosave e recuperação depois de travamento;
+- nenhuma ação destrutiva sem desfazer ou sem confirmação;
+- balde que fecha vãos olhando as linhas de várias camadas (veio da V2).
+
+## Etapa V9: Polimento visual
+
+É a antiga Etapa 6:
+- espaçamento, ícones e cores consistentes;
+- estados de hover, ativo e desativado;
+- layout salvo;
+- transições curtas;
+- revisão do visual das ferramentas novas.
+
+---
+
 ## Histórico
 
 - **Etapa 0:** auditoria feita e este arquivo criado. Nenhum código foi alterado.
@@ -443,3 +797,14 @@ Todos os itens R1–R12 abaixo foram resolvidos. Arquivos novos:
 - **Etapa 4:** menu do palco, barra de status, folha de atalhos (?), scrub nos campos, cursores e mensagens de erro claras.
   - Mais, a pedido: atualização automática pelo GitHub, instalador e desinstalador novos com animações e ícone novo. Versão 0.2.0.
   - 101 testes passando, instalação, atualização e desinstalação testadas no Windows.
+- **Parte 2 criada** (18/11/2026): o app inteiro no nível do Moho, em 9 etapas.
+- **Etapa V1:** a mesa digitalizadora desenha traços longos. O Windows não corta mais o traço da caneta como gesto (faltava `touch-action: none`). Entraram também a rejeição da palma, a ponta de borracha da caneta e o cancelamento que salva o traço.
+- **Etapa V2:** linha editável com largura por trecho (pressão), curva de pressão, afinar pontas, fidelidade, fechar e preencher, pintar por trás, borracha que mantém a largura e selecionar mesma cor.
+  - 110 testes passando, `npm run check` e `npm run smoke` ok.
+- **Etapa V3:** tween ponto a ponto entre chaves do mesmo desenho, auto-key de pontos (com shape tween automático), ímã, curvatura, separar/soldar, caminho dos pontos e esconder forma por quadro. Corrigida a edição de pontos no meio do tween, que gravava na chave errada.
+  - 120 testes passando, `npm run check` e `npm run smoke` ok.
+- **Etapa V4:** Smart Bones (correções por ângulo), força do osso com pesos visíveis, pontos presos a um osso, dinâmica e biblioteca de poses. Corrigido o F6 numa camada com ossos, que criava a chave sem o esqueleto.
+  - 127 testes passando, `npm run check` e `npm run smoke` ok.
+- **Etapa V5:** interpolação por chave com símbolos, canais por camada, editor de curvas com várias curvas (normalizar, zoom, copiar/colar), ruído e ciclo sem chaves, esticar/encolher quadros e marcadores na régua.
+  - 135 testes passando, `npm run check` e `npm run smoke` ok.
+- **Versão 0.3.0** (19/11/2026): etapas V1 a V5 publicadas no GitHub como release, com instalador e atualização automática.

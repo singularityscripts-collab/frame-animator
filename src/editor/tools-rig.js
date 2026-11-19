@@ -8,8 +8,8 @@
 //   duplo clique numa junta fixa/solta (pin). Com auto-key, cada pose vira keyframe.
 // M (de novo) alterna o modo. As alças têm tamanho fixo na tela, qualquer que seja o zoom.
 
-import { applyPoint, invert, IDENTITY } from '../player/render.js';
-import { solveIK, rotateBone, moveRoot } from '../player/bones.js';
+import { applyPoint, invert, multiply, IDENTITY } from '../player/render.js';
+import { solveIK, rotateBone, moveRoot, posedAnchors, skinBonesOf, skinIds, skinWeightsAt, solveBones } from '../player/bones.js';
 import { distToSegment } from '../player/geom.js';
 import { clone } from '../model/document.js';
 import * as C from './commands.js';
@@ -346,6 +346,60 @@ function rigBadge(stage, editor) {
   return render;
 }
 
+/**
+ * Pontos das formas da camada ativa na pose do quadro (para editar correções e ver pesos):
+ * [{ el, key (lineage), pk "sub:pt", s (tela), rest (camada, em descanso), M, elM }].
+ */
+function shapeAnchors(stage, editor) {
+  const info = editor.poseAt();
+  if (!info || info.beyond) return [];
+  const lm = editor.layerMatrixOf(editor.activeLayer);
+  const out = [];
+  for (const el of info.span.elements) {
+    if (el.type !== 'shape') continue;
+    const pa = posedAnchors(el, info.arm, info.pose);
+    const subs = el.path.subs || [el.path];
+    for (const a of pa.anchors || []) {
+      const q = subs[a.si]?.pts[a.pi];
+      if (!q) continue;
+      const w = applyPoint(multiply(lm, el.matrix), a.x, a.y);
+      out.push({ el, key: el.lineage || el.id, pk: `${a.si}:${a.pi}`, s: stage.toScreen(w.x, w.y), rest: applyPoint(el.matrix, q[0], q[1]), M: a.M, elM: el.matrix, lm });
+    }
+  }
+  return out;
+}
+
+/** Peso do osso `boneId` em cada ponto das formas com pele (bolinhas na cor do osso, em Editar rig). */
+function drawWeights(ctx, stage, editor, boneId, color) {
+  const info = editor.poseAt();
+  if (!info) return;
+  const solved = solveBones(info.arm, info.pose);
+  ctx.save();
+  for (const a of shapeAnchors(stage, editor)) {
+    const el = a.el;
+    const pinned = el.pointBones?.[a.pk];
+    let w;
+    if (pinned) w = pinned === boneId ? 1 : 0;
+    else if (el.skin) {
+      const ids = skinIds(el, solved);
+      const i = ids.indexOf(boneId);
+      w = i < 0 ? 0 : ids.length === 1 ? 1 : skinWeightsAt(skinBonesOf(ids, solved), a.rest.x, a.rest.y)[i];
+    } else w = el.bone === boneId ? 1 : 0;
+    if (w < 0.02 && !pinned) continue;
+    ctx.globalAlpha = 0.2 + 0.8 * w;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    if (pinned) ctx.rect(a.s.x - 4, a.s.y - 4, 8, 8);
+    else ctx.arc(a.s.x, a.s.y, 2.5 + 2.5 * w, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.8;
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 export function boneTool(stage, editor) {
   let st = null;
   let hover = null;
@@ -462,6 +516,19 @@ export function boneTool(stage, editor) {
 
       // ----- Posar -----
       if (!r) return editor.toast('Esta camada não tem ossos. Passe para Editar rig (M) e desenhe os ossos.');
+      // editando uma correção Smart Bone: arrastar um ponto da forma grava o ajuste
+      if (rs.smartEdit) {
+        const a = shapeAnchors(stage, editor).find((x) => Math.hypot(x.s.x - e.sx, x.s.y - e.sy) <= 7);
+        if (a) {
+          const c = editor.smartCorrections().find((x) => x.id === rs.smartEdit);
+          const w = editor.smartWeightNow(rs.smartEdit);
+          if (!c) return;
+          if (w < 0.05) return editor.toast('Neste quadro o osso não está no ângulo da correção: gire o osso (ou vá a um quadro em que ele esteja dobrado).');
+          const base = c.shapes?.[a.key]?.[a.pk] || [0, 0];
+          st = { mode: 'smart', a, w, base: [...base], before: editor.activeLayer.frames, start: e, startLayer: toLayer(r, e), lmInv: inv(r.lm), moved: false };
+          return;
+        }
+      }
       if (hit?.kind === 'head' && !hit.it.b.parentId) {
         st = { mode: 'root', start: e, startLayer: toLayer(r, e), lmInv: inv(r.lm), moved: false, boneId: hit.it.id };
         select(hit.it.id);
@@ -520,6 +587,21 @@ export function boneTool(stage, editor) {
         return;
       }
       if (st.mode === 'pick') return;
+      if (st.mode === 'smart') {
+        if (!st.moved && Math.hypot(e.sx - st.start.sx, e.sy - st.start.sy) < 2) return;
+        st.moved = true;
+        const p = applyPoint(st.lmInv, e.wx, e.wy);
+        const dx = p.x - st.startLayer.x, dy = p.y - st.startLayer.y;
+        // camada → espaço da forma (parte linear da matriz dela) → descanso (parte linear da pele no ponto)
+        const lin = (m) => [m[0], m[1], m[2], m[3], 0, 0];
+        const n = applyPoint(inv(lin(st.a.elM)), dx, dy);
+        const q = applyPoint(inv(lin(st.a.M)), n.x, n.y);
+        const layer = editor.activeLayer;
+        layer.frames = st.before;
+        editor.setSmartOffset(editor.rigState().smartEdit, st.a.key, st.a.pk, [st.base[0] + q.x / st.w, st.base[1] + q.y / st.w], { live: true });
+        stage.invalidate();
+        return;
+      }
       // ----- posar -----
       if (!st.moved) {
         if (Math.hypot(e.sx - st.start.sx, e.sy - st.start.sy) < 3) return;
@@ -587,6 +669,12 @@ export function boneTool(stage, editor) {
         editor.emit('rig');
         return;
       }
+      if (s.mode === 'smart') {
+        const layer = editor.activeLayer;
+        if (s.moved && layer.frames !== s.before) editor.commit(new C.SetLayerFrames(layer.id, s.before, layer.frames, 'Ajustar correção'));
+        editor.emit('rig');
+        return;
+      }
       if (s.mode === 'pick' || !s.moved) return stage.invalidate();
       const label = s.mode === 'root' ? 'Mover esqueleto' : 'Pose';
       editor.commit(new C.SetSpanProps(editor.activeLayerId, s.span.start, { armature: s.before }, { armature: s.span.armature }, label));
@@ -595,7 +683,7 @@ export function boneTool(stage, editor) {
     },
 
     cancel() {
-      if (st?.mode === 'joint' && st.moved) editor.activeLayer.frames = st.before;
+      if ((st?.mode === 'joint' || st?.mode === 'smart') && st.moved) editor.activeLayer.frames = st.before;
       if (st?.span && st.before) st.span.armature = st.before;
       st = null;
     },
@@ -655,8 +743,29 @@ export function boneTool(stage, editor) {
     },
 
     drawScreen(ctx) {
+      const rs = editor.rigState();
+      const mode = editor.rigMode();
+      // Editar rig com osso selecionado: peso dele em cada ponto
+      if (mode === 'edit' && rs.selected && editor.rigBones().some((b) => b.id === rs.selected)) drawWeights(ctx, stage, editor, rs.selected, boneColor(editor.rigBones(), rs.selected));
       drawSkeleton(stage, editor, ctx, { full: true, hover, st });
       drawDraft(ctx, st);
+      // correção Smart Bone em edição: pontos amarelos arrastáveis
+      if (mode === 'pose' && rs.smartEdit && editor.smartCorrections().some((c) => c.id === rs.smartEdit)) {
+        const c = editor.smartCorrections().find((x) => x.id === rs.smartEdit);
+        ctx.save();
+        for (const a of shapeAnchors(stage, editor)) {
+          const has = !!c.shapes?.[a.key]?.[a.pk];
+          ctx.fillStyle = has ? '#ffd60a' : 'rgba(255, 214, 10, 0.45)';
+          ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+          ctx.lineWidth = 1;
+          ctx.fillRect(a.s.x - 4, a.s.y - 4, 8, 8);
+          ctx.strokeRect(a.s.x - 4, a.s.y - 4, 8, 8);
+        }
+        const deg = Math.round((c.angle * 180) / Math.PI);
+        const w = Math.round(editor.smartWeightNow(c.id) * 100);
+        drawReadoutLocal(ctx, 12, 12, `Correção a ${deg}° · peso agora ${w}%`);
+        ctx.restore();
+      }
       // posar com auto-key: moldura vermelha no palco, como "gravando"
       if (editor.rigMode() === 'pose' && editor.rigState().autoKey && editor.rigBones().length) {
         const c = stage.canvas;
@@ -675,4 +784,16 @@ function localOn(s, p) {
   const dx = p.x - s.head.x, dy = p.y - s.head.y;
   const c = Math.cos(s.angle), n = Math.sin(s.angle);
   return { x: dx * c + dy * n, y: -dx * n + dy * c };
+}
+
+/** Etiqueta no canto do palco. */
+function drawReadoutLocal(ctx, x, y, text) {
+  ctx.save();
+  ctx.font = '12px system-ui, sans-serif';
+  const w = ctx.measureText(text).width + 14;
+  ctx.fillStyle = 'rgba(20, 20, 24, 0.85)';
+  ctx.fillRect(x, y, w, 22);
+  ctx.fillStyle = '#ffd60a';
+  ctx.fillText(text, x + 7, y + 15);
+  ctx.restore();
 }

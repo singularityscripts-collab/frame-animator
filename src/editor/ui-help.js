@@ -125,6 +125,19 @@ export function installStageMenu(editor, stage, actions) {
         { label: 'Colar', hint: k('paste'), run: run('paste'), disabled: !editor.clipboard },
         { label: 'Duplicar', hint: k('duplicate'), run: run('duplicate') },
         { label: 'Apagar', hint: k('delete'), run: run('delete') },
+        ...(el?.type === 'shape' ? [{ label: 'Selecionar mesma cor', hint: k('selectSameColor'), run: run('selectSameColor') }] : []),
+        ...(items.some((it) => it.el.type === 'shape')
+          ? [{ label: items.every((it) => it.el.hidden) ? 'Mostrar forma neste quadro' : 'Esconder forma neste quadro', hint: k('toggleHideShape'), run: run('toggleHideShape') }]
+          : []),
+        ...(editor.tool === 'subselect' && editor.pointSel?.size
+          ? [
+              '-',
+              { label: 'Pontos pontudos', hint: k('pointsSharp'), run: run('pointsSharp') },
+              { label: 'Pontos suaves', hint: k('pointsSmooth'), run: run('pointsSmooth') },
+              { label: 'Separar no ponto', hint: k('pointsSplit'), run: run('pointsSplit') },
+              { label: 'Soldar pontas', hint: k('pointsWeld'), run: run('pointsWeld'), disabled: editor.pointSel.size !== 2 },
+            ]
+          : []),
         '-',
         { label: 'Converter em símbolo…', hint: k('convertToSymbol'), run: run('convertToSymbol') },
         { label: 'Separar', hint: k('breakApart'), run: run('breakApart') },
@@ -163,7 +176,7 @@ const KEY_NAMES = { Left: '←', Right: '→', Up: '↑', Down: '↓', Escape: '
 export const prettyKey = (k) => k.split('+').map((p) => KEY_NAMES[p] || p).join('+');
 const GROUPS = [
   ['Arquivo', /^(new|open|save|saveAs|export|publish|import|testScene)/],
-  ['Editar', /^(undo|redo|cut|copy|paste|duplicate|delete|selectAll|deselect|escape|findReplace)$/],
+  ['Editar', /^(undo|redo|cut|copy|paste|duplicate|delete|selectAll|selectSameColor|deselect|escape|findReplace)$/],
   ['Ferramentas', /^tool/],
   ['Timeline', /(Frame|Keyframe|Tween|Play|Loop|Onion|Layer|Range|togglePlay|Multi|Scene)/],
   ['Objetos', /^(arrange|nudge|align|distribute|match|combine|convertToSymbol|newSymbol|editSymbol|breakApart|optimize|trace)/],

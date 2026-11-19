@@ -6,7 +6,7 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 import { applyEase, easeT, curveY } from './ease.js';
-import { pointAt, nearestS, prepareMorph, morphPath } from './geom.js';
+import { pointAt, nearestS, prepareMorph, morphPath, profileAt } from './geom.js';
 
 export { easeT, applyEase };
 
@@ -275,11 +275,91 @@ function gradToSpace(fill, m) {
   return { ...fill, matrix: r };
 }
 
+// ---------- animação ponto a ponto (como no Moho) ----------
+/**
+ * Mesma estrutura de pontos: mesmos subcaminhos, mesma quantidade de pontos em cada um e o mesmo
+ * fechamento. É o caso de um keyframe copiado (F6 ou auto-key) com os pontos movidos: aí o tween
+ * liga cada ponto ao seu par, com as alças, em vez de reamostrar o contorno (a forma não "derrete").
+ */
+export function sameStructure(pa, pb) {
+  if (!pa || !pb) return false;
+  const A = pa.subs || [pa], B = pb.subs || [pb];
+  if (A.length !== B.length) return false;
+  for (let i = 0; i < A.length; i++) {
+    if (!!A[i].closed !== !!B[i].closed || (A[i].pts?.length || 0) !== (B[i].pts?.length || 0)) return false;
+  }
+  return A.some((s) => s.pts?.length);
+}
+
+/** As duas chaves vêm do mesmo desenho (uma é cópia da outra, via F6, auto-key ou colar). */
+export const sameDrawing = (a, b) => (a.lineage || a.id) === (b.lineage || b.id);
+
+const sameMatrix = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 1e-9);
+const detScale = (m) => Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
+
+/** Ponto [x, y, inX, inY, outX, outY] levado pela matriz (âncora inteira; alças só pela parte linear). */
+function xfPoint(m, q) {
+  return [
+    m[0] * q[0] + m[2] * q[1] + m[4],
+    m[1] * q[0] + m[3] * q[1] + m[5],
+    m[0] * q[2] + m[2] * q[3],
+    m[1] * q[2] + m[3] * q[3],
+    m[0] * q[4] + m[2] * q[5],
+    m[1] * q[4] + m[3] * q[5],
+  ];
+}
+
+/** Perfil de largura no meio do caminho entre dois perfis (cada um pode faltar = largura cheia). */
+function lerpProfile(pa, pb, t) {
+  if (!pa?.length && !pb?.length) return undefined;
+  const ts = [...new Set([...(pa || []), ...(pb || []), { t: 0 }, { t: 1 }].map((p) => p.t))].sort((x, y) => x - y);
+  return ts.map((u) => ({ t: u, w: lerp(pa?.length ? profileAt(pa, u) : 1, pb?.length ? profileAt(pb, u) : 1, t) }));
+}
+
+/** Interpolação exata ponto a ponto entre duas formas de mesma estrutura. */
+export function lerpShapeExact(a, b, t) {
+  const keep = sameMatrix(a.matrix, b.matrix);
+  const A = a.path.subs || [a.path], B = b.path.subs || [b.path];
+  const subs = A.map((sa, si) => {
+    const sb = B[si];
+    return {
+      closed: !!sa.closed,
+      pts: sa.pts.map((qa, pi) => {
+        const qb = sb.pts[pi];
+        const xa = keep ? qa : xfPoint(a.matrix, qa), xb = keep ? qb : xfPoint(b.matrix, qb);
+        return xa.map((v, k) => lerp(v, xb[k] ?? 0, t));
+      }),
+    };
+  });
+  const path = a.path.subs ? { ...a.path, subs } : { ...subs[0], ...(a.path.fillRule ? { fillRule: a.path.fillRule } : {}) };
+  const out = { ...a, matrix: keep ? a.matrix : [1, 0, 0, 1, 0, 0], path };
+  if (keep) {
+    if (a.fill && b.fill) out.fill = lerpFill(a.fill, b.fill, t);
+    out.strokeWidth = lerp(a.strokeWidth || 0, b.strokeWidth || 0, t);
+  } else {
+    const fa = gradToSpace(a.fill, a.matrix), fb = gradToSpace(b.fill, b.matrix);
+    out.fill = fa && fb ? lerpFill(fa, fb, t) : t < 0.5 ? fa : fb;
+    // a espessura acompanha a escala que a matriz tinha (o caminho saiu da matriz)
+    out.strokeWidth = lerp((a.strokeWidth || 0) * detScale(a.matrix), (b.strokeWidth || 0) * detScale(b.matrix), t);
+  }
+  if (!(a.fill && b.fill) && keep) out.fill = t < 0.5 ? a.fill : b.fill;
+  out.stroke = a.stroke && b.stroke ? lerpHex(a.stroke, b.stroke, t) : t < 0.5 ? a.stroke : b.stroke;
+  const prof = lerpProfile(a.widthProfile, b.widthProfile, t);
+  if (prof) out.widthProfile = prof;
+  else delete out.widthProfile;
+  // esconder/mostrar é degrau: vale o do keyframe de onde o tween sai
+  if (a.hidden) out.hidden = true;
+  else delete out.hidden;
+  return out;
+}
+
 function shapeTweenElements(span, next, t) {
   const hints = span.tween.hints || [];
   return span.elements.map((a, i) => {
     const b = next.elements[i];
     if (!a || !b || a.type !== 'shape' || b.type !== 'shape') return a;
+    // mesma estrutura de pontos (e sem dicas de forma pedindo outra correspondência): ponto a ponto
+    if (!(i === 0 && hints.length) && sameDrawing(a, b) && sameStructure(a.path, b.path)) return lerpShapeExact(a, b, t);
     const path = morphPath(prepareMorph(a, b, i === 0 ? hints : []), t);
     if (!path) return a;
     const fa = gradToSpace(a.fill, a.matrix), fb = gradToSpace(b.fill, b.matrix);

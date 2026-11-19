@@ -211,6 +211,21 @@ export function createActions({ editor, stage, io, ui = {} }) {
     duplicate: { keys: ['Ctrl+D'], run: () => ed.duplicate() },
     delete: { keys: ['Delete', 'Backspace'], run: () => ed.deleteSelection() },
     selectAll: { keys: ['Ctrl+A'], run: () => ed.selectAll() },
+    selectSameColor: { keys: [], run: () => ed.selectSameColor() },
+    // pontos (Subseleção)
+    pointsSharp: { keys: [], run: () => ed.subselectTool?.setCurvature(0) },
+    pointsSmooth: { keys: [], run: () => ed.subselectTool?.setCurvature(100) },
+    pointsSplit: { keys: [], run: () => ed.subselectTool?.split() },
+    pointsWeld: { keys: [], run: () => ed.subselectTool?.weld() },
+    toggleHideShape: { keys: [], run: () => ed.toggleHideShapes() },
+    // interpolação dos keyframes (menu do quadro e atalhos personalizados)
+    interpSmooth: { keys: [], run: () => ed.setInterpolation('smooth') },
+    interpLinear: { keys: [], run: () => ed.setInterpolation('linear') },
+    interpEaseIn: { keys: [], run: () => ed.setInterpolation('easeIn') },
+    interpEaseOut: { keys: [], run: () => ed.setInterpolation('easeOut') },
+    interpStep: { keys: [], run: () => ed.setInterpolation('step') },
+    nextMarker: { keys: [], run: () => ed.gotoMarker(1) },
+    prevMarker: { keys: [], run: () => ed.gotoMarker(-1) },
     deselect: { keys: ['Ctrl+Shift+A'], run: () => ed.deselect() },
     escape: { keys: ['Escape'], run: () => stage.cancelDrag() || ed.deselect() },
     // Modificar

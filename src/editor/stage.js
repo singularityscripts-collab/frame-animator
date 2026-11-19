@@ -55,6 +55,8 @@ export class Stage {
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
     canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
     canvas.addEventListener('lostpointercapture', (e) => this.onPointerUp(e));
+    // a caneta pode ser cancelada pelo sistema (gesto, janela por cima): fecha o traço como se soltasse
+    canvas.addEventListener('pointercancel', (e) => this.onPointerUp(e));
     canvas.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     canvas.addEventListener('pointerleave', () => {
       if (this.active) return;
@@ -232,14 +234,17 @@ export class Stage {
     if (this.active) return;
     this.textEditor?.finish();
     const middle = e.button === 1;
-    if (e.button !== 0 && !middle) return;
+    // ponta de borracha da caneta (botão 5): apaga sem trocar de ferramenta
+    const penEraser = e.pointerType === 'pen' && (e.button === 5 || (e.buttons & 32) !== 0);
+    if (e.button !== 0 && !middle && !penEraser) return;
     e.preventDefault();
     this.canvas.focus();
     this.editor.stop();
     // réguas e guias: arrastar da régua cria guia; arrastar uma guia move (ou tira, se voltar à régua)
     const ev0 = this.makeEvent(e);
-    const guideTool = !middle && !this.spaceDown && this.guidesTool(ev0);
-    const tool = middle ? this.tools.hand : guideTool || this.currentTool();
+    const guideTool = !middle && !penEraser && !this.spaceDown && this.guidesTool(ev0);
+    const tool = middle ? this.tools.hand : penEraser ? this.tools.eraser : guideTool || this.currentTool();
+    this.activePointer = e.pointerId;
     try {
       this.canvas.setPointerCapture(e.pointerId);
     } catch {
@@ -250,6 +255,8 @@ export class Stage {
   }
 
   onPointerMove(e) {
+    // durante um arraste só vale o ponteiro que começou (a palma da mão ou um 2º dedo não entram no traço)
+    if (this.active && e.pointerId !== this.activePointer) return;
     const ev = this.makeEvent(e);
     this.lastPointer = ev;
     if (this.active) {
@@ -266,9 +273,10 @@ export class Stage {
   }
 
   onPointerUp(e) {
-    if (!this.active) return;
+    if (!this.active || e.pointerId !== this.activePointer) return;
     const tool = this.active;
     this.active = null;
+    this.activePointer = null;
     if (this.canvas.hasPointerCapture?.(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
     tool.up?.(this.makeEvent(e));
     this.updateCursor();
@@ -471,6 +479,8 @@ export class Stage {
     const tol = 4 / this.scale;
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
+      // forma escondida: só dá para pegar pela camada ativa (aparece tracejada)
+      if (it.el.hidden && it.layer.id !== this.editor.activeLayerId) continue;
       if (this.hitElement(it.wm ? { ...it.el, matrix: it.wm } : it.el, wx, wy, tol, it.offset, it.mcTime, 0)) return it;
     }
     return null;
@@ -618,6 +628,7 @@ export class Stage {
       ctx.setTransform(...base);
       tool.drawWorld?.(ctx);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.drawHiddenShapes(ctx);
       if (editor.tool !== 'gradient') this.drawSelection(ctx);
       if (editor.tool === 'select') {
         this.drawMotionPath(ctx);
@@ -628,6 +639,24 @@ export class Stage {
       if (editor.tool !== 'bone') drawSkeleton(this, editor, ctx);
       this.drawSnapLines(ctx);
     }
+  }
+
+  /** Formas escondidas neste quadro (camada ativa): contorno tracejado, para achar e mostrar de novo. */
+  drawHiddenShapes(ctx) {
+    const items = this.editor.frameItems().filter((it) => it.el.hidden && it.el.type === 'shape' && it.layer.id === this.editor.activeLayerId);
+    if (!items.length) return;
+    ctx.save();
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = 'rgba(120, 120, 140, 0.9)';
+    for (const it of items) {
+      const m = multiply([this.dpr, 0, 0, this.dpr, 0, 0], multiply(this.screenMatrix(), it.wm || it.el.matrix));
+      const p = new Path2D();
+      p.addPath(getPath2D(it.el.path), new DOMMatrix(m));
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.lineWidth = this.dpr;
+      ctx.stroke(p);
+    }
+    ctx.restore();
   }
 
   /** Cruz no ponto de registro do símbolo aberto. */

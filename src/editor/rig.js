@@ -9,10 +9,10 @@
 import { Editor } from './editor.js';
 import * as C from './commands.js';
 import * as TL from '../model/timeline.js';
-import { clone, uid } from '../model/document.js';
+import { clone, uid, cloneElementsWithNewIds } from '../model/document.js';
 import { elementLocalBounds } from '../model/geometry.js';
 import { applyPoint, multiply, invert, IDENTITY, getSpanAt } from '../player/render.js';
-import { solveBones, lerpPose, orderedBones } from '../player/bones.js';
+import { solveBones, lerpPose, orderedBones, smartWeights } from '../player/bones.js';
 import { distToSegment } from '../player/geom.js';
 import { applyEase } from '../player/ease.js';
 
@@ -24,37 +24,55 @@ export const boneColor = (bones, id) => BONE_COLORS[Math.max(0, bones.findIndex(
 
 /** Ossos a que o elemento está preso: lista de ids ou 'all' (pele de arquivo antigo, sem lista). */
 export function boundBones(el) {
-  if (el.type === 'shape' && el.skin) return Array.isArray(el.skinBones) ? el.skinBones : 'all';
-  return el.bone ? [el.bone] : [];
+  const pts = el.type === 'shape' && el.pointBones ? Object.values(el.pointBones) : [];
+  if (el.type === 'shape' && el.skin) return Array.isArray(el.skinBones) ? [...new Set([...el.skinBones, ...pts])] : 'all';
+  return [...new Set([...(el.bone ? [el.bone] : []), ...pts])];
 }
 
 function unbindAll(el) {
   const c = { ...el };
+  delete c.pointBones;
   delete c.bone;
   delete c.skin;
   delete c.skinBones;
   return c;
 }
 
+/** Ossos da pele (ou o osso inteiro) do elemento, sem contar os pontos presos. */
+function skinList(el) {
+  if (el.type === 'shape' && el.skin) return Array.isArray(el.skinBones) ? el.skinBones : 'all';
+  return el.bone ? [el.bone] : [];
+}
+const keepPoints = (el, c) => (el.pointBones ? { ...c, pointBones: el.pointBones } : c);
+
 /** Prende o elemento ao osso. Forma: soma o osso à pele (dois ou mais ossos = dobra); outros: troca de osso. */
 function bindTo(el, boneId, allIds) {
   if (el.type === 'shape') {
-    const cur = boundBones(el);
+    const cur = skinList(el);
     const list = cur === 'all' ? [...allIds] : cur;
     if (list.includes(boneId)) return el;
-    const c = unbindAll(el);
-    return { ...c, skin: true, skinBones: [...list, boneId] };
+    return keepPoints(el, { ...unbindAll(el), skin: true, skinBones: [...list, boneId] });
   }
   return { ...el, bone: boneId };
 }
 
 /** Solta o elemento do osso (troca pelo osso `replaceWith`, se vier). */
 function unbindFrom(el, boneId, allIds, replaceWith = null) {
-  const cur = boundBones(el);
+  // pontos presos ao osso que sai passam para o substituto (ou ficam soltos)
+  if (el.pointBones && Object.values(el.pointBones).includes(boneId)) {
+    const pb = {};
+    for (const [k, v] of Object.entries(el.pointBones)) {
+      if (v !== boneId) pb[k] = v;
+      else if (replaceWith) pb[k] = replaceWith;
+    }
+    el = { ...el, pointBones: pb };
+    if (!Object.keys(pb).length) delete el.pointBones;
+  }
+  const cur = skinList(el);
   if (cur === 'all' ? !allIds.includes(boneId) : !cur.includes(boneId)) return el;
   const list = (cur === 'all' ? [...allIds] : cur).filter((id) => id !== boneId);
   if (replaceWith && !list.includes(replaceWith)) list.push(replaceWith);
-  const c = unbindAll(el);
+  const c = keepPoints(el, unbindAll(el));
   if (!list.length) return c;
   return el.type === 'shape' ? { ...c, skin: true, skinBones: list } : { ...c, bone: list[0] };
 }
@@ -153,6 +171,8 @@ P.rigSolved = function () {
 /**
  * Muda o esqueleto de todos os keyframes da camada num passo só de desfazer.
  * fnBones(bones) devolve a lista nova; fnEls(el, index, isCurrent) devolve o elemento novo (opcional).
+ * opts.arm(extras) muda o que é do esqueleto todo e vale em todos os keyframes (correções Smart Bone,
+ * biblioteca de poses); opts.live troca ao vivo, sem histórico.
  */
 P.editRig = function (label, fnBones, fnEls, opts = {}) {
   const layer = this.activeLayer;
@@ -161,6 +181,10 @@ P.editRig = function (label, fnBones, fnEls, opts = {}) {
   if (!cur) return null;
   const base = clone(cur.armature?.bones || []);
   const bones = fnBones ? fnBones(base) : base;
+  // o resto do esqueleto (smart, poses…) é o mesmo em todos os keyframes
+  const { bones: _b, pose: _p, ...extras0 } = cur.armature || {};
+  const extras = opts.arm ? opts.arm(clone(extras0)) : extras0;
+  const ex = Object.fromEntries(Object.entries(extras).filter(([, v]) => v != null && !(Array.isArray(v) && !v.length)));
   const ids = new Set(bones.map((b) => b.id));
   const s0 = sig(cur);
   const frames = layer.frames.map((f) => {
@@ -171,7 +195,7 @@ P.editRig = function (label, fnBones, fnEls, opts = {}) {
     if (!bones.length) delete g.armature;
     else {
       const pose = Object.fromEntries(Object.entries(g.armature?.pose || {}).filter(([k]) => k === '__root' || ids.has(k)));
-      g.armature = { bones: clone(bones), pose };
+      g.armature = { ...clone(ex), bones: clone(bones), pose };
     }
     if (fnEls && (isCur || sameArt)) g.elements = g.elements.map((el, i) => fnEls(el, i, isCur) ?? el);
     return g;
@@ -288,7 +312,7 @@ P.moveJoint = function (id, which, pt, opts = {}) {
   );
 };
 
-/** Nome, pino e limites do osso. patch: { name?, pin?, min?, max? } (null tira o limite). */
+/** Nome, pino, limites, força e dinâmica do osso. patch: { name?, pin?, min?, max?, strength?, dynamics? } (null tira). */
 P.setBoneProps = function (id, patch, label = 'Osso') {
   if (!this.rigBones().some((b) => b.id === id)) return;
   this.editRig(label, (list) =>
@@ -297,6 +321,9 @@ P.setBoneProps = function (id, patch, label = 'Osso') {
       const n = { ...c, ...patch };
       for (const k of ['min', 'max']) if (n[k] == null || !Number.isFinite(n[k])) delete n[k];
       if (!n.pin) delete n.pin;
+      if (!n.dynamics) delete n.dynamics;
+      if (n.strength == null || !Number.isFinite(n.strength) || n.strength === 1) delete n.strength;
+      else n.strength = Math.max(0.1, Math.min(5, n.strength));
       if (Number.isFinite(n.min) && Number.isFinite(n.max) && n.min > n.max) [n.min, n.max] = [n.max, n.min];
       return n;
     }),
@@ -373,7 +400,7 @@ P.poseKeyframeHere = function (layer = this.activeLayer) {
   if (ns) {
     // o keyframe novo guarda a pose do quadro (sem repetir a pose nas matrizes dos elementos)
     ns.armature = clone({ ...info.arm, pose: info.pose });
-    if (!info.beyond) ns.elements = info.span.elements.map((e) => ({ ...clone(e), id: uid('e') }));
+    if (!info.beyond) ns.elements = cloneElementsWithNewIds(info.span.elements);
   }
   this.run(new C.SetLayerFrames(layer.id, layer.frames, r.frames, 'Keyframe de pose', this.frame, this.frame));
   return this.spanAt(layer);
@@ -454,4 +481,145 @@ P.resetPose = function () {
     for (const id of ids) delete out[id];
     return out;
   });
+};
+
+// ---------- biblioteca de poses (vale para a camada toda) ----------
+/** Guarda a pose do quadro com um nome. */
+P.savePose = function (name) {
+  const info = this.poseAt();
+  if (!info) return null;
+  const list = info.arm.poses || [];
+  let n = list.length + 1;
+  const used = new Set(list.map((p) => p.name));
+  while (used.has(`Pose ${n}`)) n++;
+  const entry = { id: uid('p'), name: (name || '').trim().slice(0, 40) || `Pose ${n}`, pose: clone(info.pose) };
+  this.editRig('Salvar pose', null, null, { arm: (ex) => ({ ...ex, poses: [...(ex.poses || []), entry] }) });
+  this.toast(`"${entry.name}" guardada na biblioteca de poses.`);
+  return entry;
+};
+
+/** Aplica uma pose da biblioteca no quadro (com auto-key). */
+P.applyPose = function (id) {
+  const entry = (this.poseAt()?.arm.poses || []).find((p) => p.id === id);
+  if (!entry) return false;
+  const ids = new Set(this.rigBones().map((b) => b.id));
+  return this.setPose(`Pose "${entry.name}"`, (pose) => {
+    const out = { ...pose };
+    for (const [k, v] of Object.entries(entry.pose)) if (k === '__root' || ids.has(k)) out[k] = clone(v);
+    return out;
+  });
+};
+
+P.deletePose = function (id) {
+  this.editRig('Apagar pose', null, null, { arm: (ex) => ({ ...ex, poses: (ex.poses || []).filter((p) => p.id !== id) }) });
+};
+
+P.renamePose = function (id, name) {
+  name = String(name || '').trim().slice(0, 40);
+  if (!name) return;
+  this.editRig('Renomear pose', null, null, { arm: (ex) => ({ ...ex, poses: (ex.poses || []).map((p) => (p.id === id ? { ...p, name } : p)) }) });
+};
+
+// ---------- Smart Bones: correções por ângulo ----------
+/** Correções do esqueleto (todas ou só as de um osso). */
+P.smartCorrections = function (boneId = null) {
+  const list = this.poseAt()?.arm.smart || [];
+  return boneId ? list.filter((c) => c.bone === boneId) : list;
+};
+
+/**
+ * Nova correção para o osso selecionado, no ângulo em que ele está agora (pose do quadro).
+ * Entra no modo de edição da correção: arrastar os pontos da forma grava o ajuste.
+ */
+P.addSmartCorrection = function () {
+  const info = this.poseAt();
+  const bone = this.rigState().selected;
+  if (!info || !bone) return this.toast('Selecione o osso que vai comandar a correção (cotovelo, joelho, pescoço…).'), null;
+  const angle = info.pose[bone] || 0;
+  if (Math.abs(angle) < (5 * Math.PI) / 180) return this.toast('Gire o osso primeiro (Posar): a correção vale para o ângulo em que ele está. Ex.: dobre o cotovelo a 90°.'), null;
+  const same = (info.arm.smart || []).find((c) => c.bone === bone && Math.abs(c.angle - angle) < (2 * Math.PI) / 180);
+  if (same) {
+    this.setRigState({ smartEdit: same.id });
+    return same;
+  }
+  const c = { id: uid('c'), bone, angle, shapes: {} };
+  this.editRig('Nova correção (Smart Bone)', null, null, { arm: (ex) => ({ ...ex, smart: [...(ex.smart || []), c] }) });
+  this.setRigState({ smartEdit: c.id });
+  this.toast(`Correção a ${Math.round((angle * 180) / Math.PI)}°: arraste os pontos da forma para corrigir. "Concluir" no painel termina.`);
+  return c;
+};
+
+P.deleteSmartCorrection = function (id) {
+  this.editRig('Apagar correção', null, null, { arm: (ex) => ({ ...ex, smart: (ex.smart || []).filter((c) => c.id !== id) }) });
+  if (this.rigState().smartEdit === id) this.setRigState({ smartEdit: null });
+};
+
+/** Peso atual (0–1) da correção na pose do quadro: 1 quando o osso está no ângulo dela. */
+P.smartWeightNow = function (id) {
+  const info = this.poseAt();
+  return info ? smartWeights(info.arm, info.pose).get(id) || 0 : 0;
+};
+
+/** Grava o deslocamento (no espaço da forma em descanso) de um ponto numa correção. */
+P.setSmartOffset = function (id, key, pk, d, opts = {}) {
+  return this.editRig('Ajustar correção', null, null, {
+    ...opts,
+    arm: (ex) => ({
+      ...ex,
+      smart: (ex.smart || []).map((c) => {
+        if (c.id !== id) return c;
+        const shapes = { ...(c.shapes || {}) };
+        const pts = { ...(shapes[key] || {}) };
+        if (Math.hypot(d[0], d[1]) < 1e-3) delete pts[pk];
+        else pts[pk] = [Math.round(d[0] * 100) / 100, Math.round(d[1] * 100) / 100];
+        if (Object.keys(pts).length) shapes[key] = pts;
+        else delete shapes[key];
+        return { ...c, shapes };
+      }),
+    }),
+  });
+};
+
+// ---------- pontos presos a um osso ----------
+/**
+ * Prende os pontos selecionados (chaves "elId:sub:pt" da Subseleção) ao osso: cada um passa a seguir
+ * só aquele osso, e a forma vira "com pele" se ainda não era. boneId null solta os pontos.
+ */
+P.bindPoints = function (keys, boneId) {
+  const cur = getSpanAt(this.activeLayer, this.frame) || this.rigSpan();
+  if (!cur) return 0;
+  const byIndex = new Map();
+  for (const k of keys) {
+    const [id, si, pi] = k.split(':');
+    const i = cur.elements.findIndex((e) => e.id === id);
+    if (i < 0 || cur.elements[i].type !== 'shape') continue;
+    if (!byIndex.has(i)) byIndex.set(i, []);
+    byIndex.get(i).push(`${si}:${pi}`);
+  }
+  if (!byIndex.size) {
+    this.toast('Selecione pontos de uma forma desta camada com a Subseleção (A).');
+    return 0;
+  }
+  let n = 0;
+  this.editRig(boneId ? 'Prender pontos ao osso' : 'Soltar pontos', null, (el, i) => {
+    const list = byIndex.get(i);
+    if (!list || el.type !== 'shape') return el;
+    const pb = { ...(el.pointBones || {}) };
+    for (const k of list) {
+      if (boneId) pb[k] = boneId;
+      else delete pb[k];
+    }
+    let c = { ...el, pointBones: pb };
+    if (!Object.keys(pb).length) delete c.pointBones;
+    // presa inteira a um osso (el.bone): vira pele com aquele osso, para os pontos poderem seguir outro
+    if (boneId && c.bone) {
+      c = { ...c, skin: true, skinBones: [c.bone] };
+      delete c.bone;
+    }
+    return c;
+  });
+  const name = boneId ? this.rigBones().find((b) => b.id === boneId)?.name || 'osso' : null;
+  n = [...byIndex.values()].flat().length;
+  this.toast(boneId ? `${n} ${n === 1 ? 'ponto preso' : 'pontos presos'} a ${name}: seguem só este osso.` : 'Pontos soltos: voltam a seguir a mistura dos ossos.');
+  return n;
 };

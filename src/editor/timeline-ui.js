@@ -2,7 +2,8 @@
 // câmera e parentesco) e a grade de quadros (canvas) com tweens, rótulos, sons e seleção de intervalo.
 
 import { icons } from './icons.js';
-import { showContextMenu } from './ui-kit.js';
+import { showContextMenu, openDialog } from './ui-kit.js';
+import { INTERPOLATIONS, interpKind, layerChannels } from './editor-channels.js';
 import { soundById, decodeSound, computePeaks } from '../player/audio.js';
 
 // largura da célula de quadro (zoom da timeline, guardado neste computador)
@@ -59,12 +60,61 @@ const KIND_TITLE = {
 const peaksCache = new Map();
 let waveCtx = null;
 
+/**
+ * Símbolo do keyframe pela interpolação (o mesmo da lista do menu):
+ * ● suave · ◆ linear · ◐ acelerar · ◑ desacelerar · ■ degrau · ▲ passa do ponto/elástico/quicar · ○ curva própria.
+ */
+function drawGlyph(ctx, cx, cy, kind, color, r = 3.4) {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  if (kind === 'linear') {
+    ctx.moveTo(cx, cy - r - 0.6);
+    ctx.lineTo(cx + r + 0.6, cy);
+    ctx.lineTo(cx, cy + r + 0.6);
+    ctx.lineTo(cx - r - 0.6, cy);
+    ctx.closePath();
+    ctx.fill();
+  } else if (kind === 'step') {
+    ctx.rect(cx - r + 0.4, cy - r + 0.4, 2 * r - 0.8, 2 * r - 0.8);
+    ctx.fill();
+  } else if (kind === 'overshoot' || kind === 'elastic' || kind === 'bounce') {
+    ctx.moveTo(cx, cy - r - 0.8);
+    ctx.lineTo(cx + r + 0.6, cy + r);
+    ctx.lineTo(cx - r - 0.6, cy + r);
+    ctx.closePath();
+    ctx.fill();
+  } else if (kind === 'easeIn' || kind === 'easeOut') {
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    // metade cheia: o lado lento (entrada à esquerda, saída à direita)
+    if (kind === 'easeIn') ctx.arc(cx, cy, r, Math.PI / 2, (3 * Math.PI) / 2);
+    else ctx.arc(cx, cy, r, -Math.PI / 2, Math.PI / 2);
+    ctx.closePath();
+    ctx.fill();
+  } else if (kind === 'custom') {
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 export class TimelineUI {
   constructor(editor, actions) {
     this.editor = editor;
     this.actions = actions;
     this.scrollX = 0;
     this.rows = [];
+    this.openChannels = new Set(); // camadas com os canais abertos
     this.$ = (id) => document.getElementById(id);
     this.framesCanvas = this.$('tl-frames');
     this.rulerCanvas = this.$('tl-ruler');
@@ -265,7 +315,15 @@ export class TimelineUI {
       for (let p = l.folderId && byId.get(l.folderId), g = 0; p && g < 32; p = p.folderId && byId.get(p.folderId), g++) if (p.collapsed) return true;
       return false;
     };
-    return ed.layers.map((layer, index) => ({ layer, index, depth: depthOf(layer) })).filter((r) => !hidden(r.layer));
+    const out = [];
+    ed.layers.forEach((layer, index) => {
+      if (hidden(layer)) return;
+      const depth = depthOf(layer);
+      out.push({ layer, index, depth });
+      if (layer.type === 'folder' || !this.openChannels.has(layer.id)) return;
+      for (const channel of layerChannels(layer)) out.push({ layer, index, depth, channel });
+    });
+    return out;
   }
 
   renderLayers() {
@@ -275,6 +333,17 @@ export class TimelineUI {
     el.innerHTML = '';
     this.rows.forEach((r, rowIndex) => {
       const { layer, index, depth } = r;
+      if (r.channel) {
+        const row = document.createElement('div');
+        row.className = 'layer-row channel-row' + (layer.id === ed.activeLayerId ? ' active' : '');
+        row.dataset.index = index;
+        row.innerHTML = `<span style="width:${depth * INDENT + 30}px;flex:none"></span><span class="ch-dot" style="background:${r.channel.color}"></span><span class="ch-name"></span>`;
+        row.querySelector('.ch-name').textContent = r.channel.label;
+        row.title = 'Canal: só as chaves em que esta propriedade muda. Clique numa chave para ir até ela.';
+        row.addEventListener('pointerdown', () => ed.setActiveLayer(layer.id));
+        el.appendChild(row);
+        return;
+      }
       const kind = ed.layerKind(layer);
       const row = document.createElement('div');
       const active = layer.id === ed.activeLayerId;
@@ -285,7 +354,7 @@ export class TimelineUI {
       const special = kind === 'folder' || kind === 'camera';
       row.innerHTML = `
         <span style="width:${indent}px;flex:none"></span>
-        ${kind === 'folder' ? `<button class="lr-caret" title="Abrir/fechar pasta">${layer.collapsed ? '▶' : '▼'}</button>` : ''}
+        ${kind === 'folder' ? `<button class="lr-caret" title="Abrir/fechar pasta">${layer.collapsed ? '▶' : '▼'}</button>` : `<button class="lr-caret lr-chan" title="Canais: uma linha por propriedade (posição, pontos, ossos…)">${this.openChannels.has(layer.id) ? '▾' : '▸'}</button>`}
         <span class="lr-icon lr-kind" title="${KIND_TITLE[kind]} · duplo clique: propriedades">${icons[KIND_ICON[kind]] || icons.layer}</span>
         <span class="lr-name"></span>
         ${parent ? `<span class="lr-icon lr-link" title="Pai: ${parent.name.replace(/"/g, '&quot;')}">${icons.link}</span>` : ''}
@@ -308,6 +377,7 @@ export class TimelineUI {
       caret?.addEventListener('pointerdown', (e) => e.stopPropagation());
       caret?.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (kind !== 'folder') return this.toggleChannels(layer.id);
         ed.toggleFolder(layer.id);
       });
       row.querySelector('.lr-kind').addEventListener('dblclick', () => this.actions.layerProperties(layer.id));
@@ -316,6 +386,18 @@ export class TimelineUI {
       row.addEventListener('contextmenu', (e) => this.layerMenu(e, layer));
       el.appendChild(row);
     });
+  }
+
+  /** Abre ou fecha os canais da camada. */
+  toggleChannels(id) {
+    if (this.openChannels.has(id)) this.openChannels.delete(id);
+    else {
+      this.openChannels.add(id);
+      const layer = this.editor.layer(id);
+      if (layer && !layerChannels(layer).length) this.editor.toast('Esta camada ainda não tem nada animado: os canais aparecem quando uma propriedade muda entre keyframes.');
+    }
+    this.renderLayers();
+    this.redraw();
   }
 
   layerMenu(e, layer) {
@@ -339,8 +421,38 @@ export class TimelineUI {
         { label: 'Adicionar guia de movimento', run: run('addMotionGuide'), disabled: kind !== 'normal' },
       );
     }
+    if (kind !== 'folder') {
+      const m = layer.modifiers || {};
+      items.push(
+        '-',
+        { label: this.openChannels.has(layer.id) ? 'Fechar canais' : 'Abrir canais', run: () => this.toggleChannels(layer.id) },
+        { label: m.noise ? 'Ruído…' : 'Adicionar ruído (tremer)…', run: () => this.noiseDialog(layer) },
+        ...(m.noise ? [{ label: 'Tirar ruído', run: () => ed.setLayerModifiers(layer.id, { noise: null }, 'Tirar ruído') }] : []),
+        ...(m.cycle ? [{ label: 'Tirar ciclo', run: () => ed.setLayerModifiers(layer.id, { cycle: null }, 'Tirar ciclo') }] : []),
+      );
+    }
     items.push('-', { label: kind === 'folder' ? 'Apagar pasta (e o conteúdo)' : 'Apagar camada', run: run('deleteLayer') });
     showContextMenu(e.clientX, e.clientY, items);
+  }
+
+  /** Ruído (tremer) da camada: posição, giro e escala, sem chaves. */
+  async noiseDialog(layer) {
+    const n = layer.modifiers?.noise || { position: 4, rotation: 0, scale: 0, speed: 3, seed: 1 };
+    const field = (name, label, v, step = 1) => `<label class="field wide"><span style="flex:1">${label}</span><input type="number" name="${name}" value="${v}" step="${step}" style="flex:0 0 90px"></label>`;
+    const r = await openDialog({
+      title: `Ruído: ${layer.name}`,
+      body: `<p class="dlg-text">A camada treme sozinha, sem criar chaves (câmera na mão, susto, motor). Aparece ao tocar e na exportação.</p>
+        ${field('position', 'Posição (px)', n.position ?? 0)}
+        ${field('rotation', 'Giro (graus)', n.rotation ?? 0)}
+        ${field('scale', 'Escala (%)', n.scale ?? 0)}
+        ${field('speed', 'Lentidão (quadros por mudança)', n.speed ?? 3)}
+        ${field('seed', 'Semente (outro jeito de tremer)', n.seed ?? 1)}`,
+      ok: 'Aplicar',
+    });
+    if (!r) return;
+    const num = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v) || 0));
+    const noise = { position: num(r.position, 0, 500), rotation: num(r.rotation, 0, 180), scale: num(r.scale, 0, 100), speed: num(r.speed, 1, 120), seed: Math.round(num(r.seed, 1, 9999)) };
+    this.editor.setLayerModifiers(layer.id, { noise: noise.position || noise.rotation || noise.scale ? noise : null }, 'Ruído');
   }
 
   rename(row, layer) {
@@ -446,6 +558,8 @@ export class TimelineUI {
       } catch {
         // ponteiro que não dá para capturar (evento sintético): segue sem captura
       }
+      const channel = this.rows[row]?.channel;
+      if (channel) return this.channelDown(e, layer, channel, frame, pick);
       const sel = ed.frameSel;
       const insideSel = sel && frame >= sel.from && frame <= sel.to && sel.layerIds.includes(layer.id);
       const span = layer.type !== 'folder' ? layer.frames.find((s) => s.start === frame) : null;
@@ -555,6 +669,27 @@ export class TimelineUI {
       }
       const h = this.rulerHandleAt(xOf(e), e.clientY - rc.getBoundingClientRect().top);
       let move;
+      const mk = this.markerAt(xOf(e), e.clientY - rc.getBoundingClientRect().top);
+      if (mk && !h) {
+        // arrasta o marcador (clique sem arrastar: vai até ele)
+        let to = mk.frame;
+        move = (ev) => {
+          to = frameAt(xOf(ev));
+          this.markerDrag = { id: mk.id, frame: to };
+          this.redraw();
+        };
+        const upM = () => {
+          rc.removeEventListener('pointermove', move);
+          rc.removeEventListener('pointerup', upM);
+          this.markerDrag = null;
+          if (to !== mk.frame) ed.moveMarker(mk.id, to);
+          else ed.setFrame(mk.frame);
+          this.redraw();
+        };
+        rc.addEventListener('pointermove', move);
+        rc.addEventListener('pointerup', upM);
+        return;
+      }
       if (h) {
         // arrasta um marcador
         move = (ev) => {
@@ -583,12 +718,26 @@ export class TimelineUI {
       rc.style.cursor = h ? 'ew-resize' : 'pointer';
       rc.title = h ? { onionBefore: 'Arraste: quadros do onion skin antes', onionAfter: 'Arraste: quadros do onion skin depois', rangeIn: 'Arraste: início da faixa de reprodução', rangeOut: 'Arraste: fim da faixa de reprodução' }[h] : 'Clique ou arraste para ir aos quadros · clique direito: faixa de reprodução';
     });
+    rc.addEventListener('dblclick', (e) => {
+      const mk = this.markerAt(xOf(e), e.clientY - rc.getBoundingClientRect().top);
+      if (mk) this.renameMarker(mk);
+    });
     rc.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       const ed = this.editor;
       const f = frameAt(xOf(e));
       const r = ed.playRange;
+      const mk = this.markerAt(xOf(e), e.clientY - rc.getBoundingClientRect().top);
       showContextMenu(e.clientX, e.clientY, [
+        ...(mk
+          ? [
+              { label: `Renomear "${mk.name}"…`, run: () => this.renameMarker(mk) },
+              { label: `Apagar marcador "${mk.name}"`, run: () => ed.deleteMarker(mk.id) },
+            ]
+          : [{ label: `Marcador no quadro ${f + 1}…`, run: () => this.addMarkerDialog(f) }]),
+        { label: 'Ir ao marcador anterior', run: () => ed.gotoMarker(-1), disabled: !ed.markers().some((m) => m.frame < ed.frame) },
+        { label: 'Ir ao próximo marcador', run: () => ed.gotoMarker(1), disabled: !ed.markers().some((m) => m.frame > ed.frame) },
+        '-',
         { label: `Início da faixa no quadro ${f + 1}`, run: () => ed.setPlayRange({ from: f, to: r ? Math.max(f, r.to) : ed.length - 1 }) },
         { label: `Fim da faixa no quadro ${f + 1}`, run: () => ed.setPlayRange({ from: r ? Math.min(f, r.from) : 0, to: f }) },
         { label: 'Faixa = quadros selecionados', run: () => this.actions.run('playRangeFromSelection'), disabled: !ed.hasFrameRange() },
@@ -602,6 +751,48 @@ export class TimelineUI {
       if (e.ctrlKey) return this.zoomAt(e.deltaY < 0 ? 1.25 : 0.8, xOf(e));
       this.hscroll.scrollLeft += e.deltaY + e.deltaX;
     });
+  }
+
+  /**
+   * Clique numa linha de canal: vai para o quadro. Numa key de motion tween, arrastar muda o quadro
+   * dela dentro do trecho (as outras chaves de canal são keyframes da camada: arraste na linha da camada).
+   */
+  channelDown(e, layer, ch, frame, pick) {
+    const ed = this.editor;
+    ed.setActiveLayer(layer.id);
+    ed.setFrameSelection(null);
+    ed.setFrame(frame);
+    const key = ch.keys.find((k) => k.frame === frame && k.motion);
+    if (!key) return;
+    const fc = this.framesCanvas;
+    let to = frame;
+    const move = (ev) => {
+      to = pick(ev).frame;
+      ed.setFrame(Math.max(key.motion.start, to));
+    };
+    const up = () => {
+      fc.removeEventListener('pointermove', move);
+      fc.removeEventListener('pointerup', up);
+      if (to !== frame) ed.moveMotionKey(layer.id, key.motion.start, key.motion.prop, key.motion.t, to - key.motion.start);
+    };
+    fc.addEventListener('pointermove', move);
+    fc.addEventListener('pointerup', up);
+  }
+
+  /** Marcador (de cena) sob o ponteiro na régua, ou null. */
+  markerAt(x, y) {
+    if (y > 14) return null;
+    return this.editor.markers().find((m) => Math.abs(m.frame * CW - this.scrollX + CW / 2 - x) <= 6) || null;
+  }
+
+  async addMarkerDialog(frame) {
+    const r = await openDialog({ title: `Marcador no quadro ${frame + 1}`, body: '<label class="field wide"><span style="flex:0 0 60px">Nome</span><input type="text" name="name" maxlength="60" placeholder="Ex.: pulo, fala começa, corte" style="flex:1"></label>', ok: 'Criar' });
+    if (r) this.editor.addMarker(frame, r.name);
+  }
+
+  async renameMarker(mk) {
+    const r = await openDialog({ title: 'Renomear marcador', body: `<label class="field wide"><span style="flex:0 0 60px">Nome</span><input type="text" name="name" maxlength="60" value="${mk.name.replace(/"/g, '&quot;')}" style="flex:1"></label>`, ok: 'Renomear' });
+    if (r) this.editor.renameMarker(mk.id, r.name);
   }
 
   /** Marcador da régua sob o ponteiro: 'onionBefore' | 'onionAfter' | 'rangeIn' | 'rangeOut' | null. */
@@ -660,8 +851,24 @@ export class TimelineUI {
       ]),
       ...(anyTween ? [{ label: 'Remover tween' + n, hint: allTween ? 'Ctrl+T' : '', run: run('removeTween') }] : []),
     ];
+    const interp = Object.entries(INTERPOLATIONS).map(([k, d]) => ({ label: `${d.glyph}  ${d.label}`, run: () => ed.setInterpolation(k) }));
+    const retime = [
+      ...[200, 150, 75, 50].map((pct) => ({ label: `${pct > 100 ? 'Esticar' : 'Encolher'} para ${pct}%`, run: () => ed.retimeRange(pct / 100) })),
+      { label: 'Duração exata…', run: () => this.retimeDialog() },
+    ];
     showContextMenu(x, y, [
       ...tweenItems,
+      { label: 'Interpolação ▸', disabled: !spans.length, run: () => showContextMenu(x, y, interp) },
+      { label: 'Esticar ou encolher ▸', disabled: !range, run: () => showContextMenu(x, y, retime) },
+      {
+        label: 'Ciclo ▸',
+        run: () =>
+          showContextMenu(x, y, [
+            { label: 'Repetir estes quadros depois do fim', run: () => ed.cycleFromSelection('loop') },
+            { label: 'Ir e voltar (ping-pong)', run: () => ed.cycleFromSelection('pingpong') },
+            { label: 'Tirar ciclo', disabled: !layer.modifiers?.cycle, run: () => ed.setLayerModifiers(layer.id, { cycle: null }, 'Tirar ciclo') },
+          ]),
+      },
       '-',
       { label: 'Inserir quadro', hint: 'F5', run: run('insertFrame') },
       { label: range ? 'Remover quadros' : 'Remover quadro', hint: 'Shift+F5', run: run('removeFrame'), disabled: !span },
@@ -682,6 +889,22 @@ export class TimelineUI {
       '-',
       { label: 'Rótulo e som do quadro…', run: run('showProperties') },
     ]);
+  }
+
+  /** Esticar/encolher o intervalo para uma duração em quadros. */
+  async retimeDialog() {
+    const ed = this.editor;
+    if (!ed.hasFrameRange()) return;
+    const r = ed.frameRange();
+    const len = r.to - r.from + 1;
+    const res = await openDialog({
+      title: 'Esticar ou encolher quadros',
+      body: `<p class="dlg-text">Hoje: ${len} quadros (${r.from + 1}–${r.to + 1}). As chaves de dentro ficam proporcionais e o resto da camada anda junto.</p>
+        <label class="field wide"><span style="flex:1">Nova duração (quadros)</span><input type="number" name="len" min="1" max="9999" value="${len}" style="flex:0 0 90px"></label>`,
+      ok: 'Aplicar',
+    });
+    const n = Math.round(Number(res?.len));
+    if (n >= 1 && n !== len) ed.retimeRange(n / len);
   }
 
   bindResizer() {
@@ -770,9 +993,10 @@ export class TimelineUI {
     ctx.fillStyle = C.bg;
     ctx.fillRect(0, 0, w, h);
 
-    rows.forEach(({ layer }, r) => {
+    rows.forEach(({ layer, channel }, r) => {
       const y = r * RH;
       const active = layer.id === ed.activeLayerId;
+      if (channel) return this.drawChannel(ctx, channel, y, w, f0, f1, sx);
       if (layer.type === 'folder') {
         ctx.fillStyle = active ? C.rowActive : C.folderRow;
         ctx.fillRect(0, y, w, RH);
@@ -855,6 +1079,43 @@ export class TimelineUI {
     ctx.fillRect(px - 0.5, 0, 1, h);
   }
 
+  /** Linha de um canal: fundo discreto, faixa do modificador e as chaves com o símbolo da interpolação. */
+  drawChannel(ctx, ch, y, w, f0, f1, sx) {
+    ctx.fillStyle = '#1d1d22';
+    ctx.fillRect(0, y, w, RH);
+    for (let f = f0; f <= f1; f++) {
+      ctx.fillStyle = 'rgba(255,255,255,0.035)';
+      ctx.fillRect(f * CW - sx + CW - 1, y, 1, RH);
+    }
+    const cy = y + RH / 2;
+    if (ch.band) {
+      const x0 = ch.band.from * CW - sx, x1 = Math.min(w, (Number.isFinite(ch.band.to) ? ch.band.to + 1 : 1e6) * CW - sx);
+      ctx.fillStyle = ch.color + '33';
+      ctx.fillRect(x0, y + 5, x1 - x0, RH - 10);
+      ctx.strokeStyle = ch.color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x0 + 0.5, y + 5.5, x1 - x0 - 1, RH - 11);
+      if (ch.id === 'noise') {
+        ctx.beginPath();
+        for (let x = Math.max(0, x0); x < x1; x += 3) ctx.lineTo(x, cy + Math.sin(x * 0.7) * 3);
+        ctx.stroke();
+      }
+    }
+    // linha ligando as chaves
+    if (ch.keys.length > 1 && !ch.band) {
+      ctx.fillStyle = ch.color + '55';
+      const a = ch.keys[0].frame * CW - sx + CW / 2, b = ch.keys[ch.keys.length - 1].frame * CW - sx + CW / 2;
+      ctx.fillRect(a, cy - 0.5, b - a, 1);
+    }
+    for (const k of ch.keys) {
+      if (k.kind === 'none') continue;
+      if (k.frame < f0 - 1 || k.frame > f1 + 1) continue;
+      drawGlyph(ctx, k.frame * CW - sx + CW / 2, cy, k.kind, ch.color, 3.6);
+    }
+    ctx.fillStyle = '#2a2a31';
+    ctx.fillRect(0, y + RH - 1, w, 1);
+  }
+
   drawSpan(ctx, layer, s, si, y, active, sx) {
     const ed = this.editor;
     const full = s.elements.length > 0 || layer.type === 'camera';
@@ -917,7 +1178,10 @@ export class TimelineUI {
     const cx = x0 + CW / 2, cy = y + RH / 2 + 4;
     ctx.beginPath();
     ctx.arc(cx, cy, 3.2, 0, Math.PI * 2);
-    if (full) {
+    if (full && s.tween && layer.frames[si + 1]) {
+      // com tween: o símbolo diz a interpolação até a próxima chave
+      drawGlyph(ctx, cx, cy, interpKind(s), C.dot, 3.2);
+    } else if (full) {
       ctx.fillStyle = C.dot;
       ctx.fill();
     } else {
@@ -1044,6 +1308,31 @@ export class TimelineUI {
 
     ctx.fillStyle = 'rgba(255,255,255,0.05)';
     ctx.fillRect(0 - sx, 0, ed.length * CW, h);
+    // marcadores da cena: bandeirinha com o nome
+    ctx.save();
+    ctx.font = '10px "Segoe UI", system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    for (const m of ed.markers()) {
+      const f = this.markerDrag?.id === m.id ? this.markerDrag.frame : m.frame;
+      const mx = f * CW - sx + CW / 2;
+      if (mx < -100 || mx > w + 10) continue;
+      ctx.fillStyle = '#ffb340';
+      ctx.beginPath();
+      ctx.moveTo(mx - 4, 0);
+      ctx.lineTo(mx + 4, 0);
+      ctx.lineTo(mx + 4, 8);
+      ctx.lineTo(mx, 12);
+      ctx.lineTo(mx - 4, 8);
+      ctx.closePath();
+      ctx.fill();
+      const tw = ctx.measureText(m.name).width;
+      ctx.fillStyle = 'rgba(30,30,34,0.85)';
+      ctx.fillRect(mx + 6, 1, tw + 6, 11);
+      ctx.fillStyle = '#ffd59a';
+      ctx.textAlign = 'left';
+      ctx.fillText(m.name, mx + 9, 7);
+    }
+    ctx.restore();
 
     ctx.font = '10px "Segoe UI", system-ui, sans-serif';
     ctx.textAlign = 'center';

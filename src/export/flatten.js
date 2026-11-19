@@ -8,7 +8,7 @@
 //  { kind: 'mask', mask: [itens], items: [itens] }
 // Cores ficam como estão; `ct` é a transformação de cor acumulada (aplique com applyCT).
 
-import { layerMatrices, layerFrame, isHiddenLayer, instanceFrame, symbolById, multiply, subpaths, shapePath, IDENTITY, isGradient } from '../player/render.js';
+import { layerMatrices, layerFrame, shownLayerFrame, isHiddenLayer, instanceFrame, symbolById, multiply, subpaths, shapePath, IDENTITY, isGradient } from '../player/render.js';
 import { colorToCT } from '../player/tween.js';
 import { variableStrokePolys, patternPlacements, quickBounds } from '../player/geom.js';
 
@@ -77,6 +77,7 @@ function worldFill(fill, m) {
 }
 
 function flattenElement(out, doc, el, M, ct, ctx) {
+  if (el.hidden) return; // forma escondida neste quadro (animação de pontos)
   if (el.type === 'shape') {
     const m = multiply(M, el.matrix);
     const elCT = combineCT(ct, el.color && el.color.mode !== 'none' ? colorToCT(el.color) : null);
@@ -127,7 +128,7 @@ export function flattenTimeline(out, doc, tl, frame, M = IDENTITY, ct = null, ct
   const byId = new Map(tl.layers.map((l) => [l.id, l]));
   const shown = (l) => !isHiddenLayer(tl, l);
   const doLayer = (dst, layer) => {
-    const lf = layerFrame(layer, frame, tl);
+    const lf = shownLayerFrame(layer, frame, tl);
     if (!lf) return;
     const lm = multiply(M, lms.get(layer.id) || IDENTITY);
     for (const it of lf.items) flattenElement(dst, doc, it.el, lm, ct, { ...ctx, offset: lf.offset, mcTime: it.mcTime });

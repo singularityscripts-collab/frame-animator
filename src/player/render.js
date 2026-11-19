@@ -7,7 +7,7 @@ import { guideFromElements, variableStrokePolys, patternPlacements, quickBounds,
 import { getImage, drawText, drawComponent, textBox } from './assets.js';
 import { BLEND_MODES, applyFilters, cachedContent, renderContent, drawNineSlice, draw3D, has3D, scaleOfTransform } from './effects.js';
 import { drawMesh, mlsPoint, warpPathPts, subdivideSub } from './mesh.js';
-import { poseElements, lerpPose } from './bones.js';
+import { poseElements, lerpPose, hasDynamics, dynamicPose } from './bones.js';
 
 // ---------- Matrizes 2D no formato do canvas: [a, b, c, d, e, f] ----------
 
@@ -224,6 +224,8 @@ export function layerFrame(layer, frame, tl = null) {
     const next = tweenTarget(layer, si);
     let pose = span.armature.pose || {};
     if (next?.armature && offset > 0) pose = lerpPose(pose, next.armature.pose || {}, applyEase(offset / span.duration, span.tween));
+    // dinâmica: ossos que balançam sozinhos (simulados quadro a quadro desde o começo da camada)
+    if (hasDynamics(span.armature)) pose = dynamicPose(layer, frame);
     elements = poseElements(elements, span.armature, pose);
   }
   return {
@@ -426,6 +428,8 @@ export function drawElement(ctx, doc, el, env = {}) {
     el = rt.adjust(path, el);
     if (!el) return;
   }
+  // forma escondida neste quadro: não aparece (o editor mostra só um contorno tracejado)
+  if (el.hidden) return;
   if (env.outline && el.type !== 'instance') {
     const box = el.type === 'shape' ? null : localBox(el, rt, path);
     const p = box ? rectPath2D(box) : getPath2D(shapePath(el));
@@ -680,7 +684,7 @@ export function renderTimeline(ctx, doc, tl, frame, opts = {}) {
 
   const drawLayer = (c, layer) => {
     if (opts.layerFilter && !opts.layerFilter(layer)) return;
-    const lf = layerFrame(layer, frame, tl);
+    const lf = shownLayerFrame(layer, frame, tl);
     if (!lf) return;
     const lm = lms.get(layer.id) || IDENTITY;
     c.save();
@@ -781,4 +785,57 @@ export function renderDocumentFrame(ctx, doc, sceneIndex, frame, { width, height
   const scene = doc.scenes[sceneIndex];
   renderTimeline(ctx, doc, scene, frame, { playMC: true });
   applyCameraTint(ctx, doc, cameraAt(doc, scene, frame), transparent);
+}
+
+// ---------- modificadores da camada (sem chaves): ciclo e ruído ----------
+// layer.modifiers = { cycle?: { from, to, mode: 'loop' | 'pingpong' },
+//                     noise?: { position (px), rotation (graus), scale (%), speed (quadros), seed } }
+// Valem no desenho e na exportação; a edição continua nos quadros de verdade.
+
+/** Quadro que a camada mostra com o ciclo: depois de `to`, repete [from, to] (ou vai e volta). */
+export function cycleFrame(layer, frame) {
+  const c = layer.modifiers?.cycle;
+  if (!c || !(c.to > c.from) || frame <= c.to) return frame;
+  const len = c.to - c.from + 1;
+  const k = frame - c.from;
+  if (c.mode === 'pingpong') {
+    const period = 2 * (len - 1);
+    const m = k % period;
+    return c.from + (m < len ? m : period - m);
+  }
+  return c.from + (k % len);
+}
+
+/** Ruído suave e sempre igual (valor entre −1 e 1) no tempo t. */
+function hashNoise(n, seed) {
+  const x = Math.sin(n * 127.1 + seed * 311.7) * 43758.5453;
+  return (x - Math.floor(x)) * 2 - 1;
+}
+export function noise1(t, seed = 0) {
+  const i = Math.floor(t), f = t - i;
+  const u = f * f * (3 - 2 * f);
+  return hashNoise(i, seed) * (1 - u) + hashNoise(i + 1, seed) * u;
+}
+
+/** Matrizes de ruído do quadro: { pre (no espaço da camada), post (no próprio elemento) } ou null. */
+export function noiseAt(layer, frame) {
+  const n = layer.modifiers?.noise;
+  if (!n) return null;
+  const pos = Number(n.position) || 0, rot = Number(n.rotation) || 0, sc = Number(n.scale) || 0;
+  if (!pos && !rot && !sc) return null;
+  const t = frame / Math.max(1, Number(n.speed) || 4);
+  const seed = Number(n.seed) || 1;
+  const pre = translation(pos * noise1(t, seed), pos * noise1(t, seed + 17));
+  const s = 1 + (sc / 100) * noise1(t, seed + 47);
+  const post = multiply(rotation(((rot * Math.PI) / 180) * noise1(t, seed + 31)), [s, 0, 0, s, 0, 0]);
+  return { pre, post };
+}
+
+/** O que a camada mostra no quadro com os modificadores (ciclo e ruído): para desenhar e exportar. */
+export function shownLayerFrame(layer, frame, tl = null) {
+  const lf = layerFrame(layer, cycleFrame(layer, frame), tl);
+  if (!lf) return lf;
+  const nz = noiseAt(layer, frame);
+  if (!nz) return lf;
+  return { ...lf, items: lf.items.map((it) => ({ ...it, el: { ...it.el, matrix: multiply(nz.pre, multiply(it.el.matrix, nz.post)) } })) };
 }

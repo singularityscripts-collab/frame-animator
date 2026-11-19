@@ -4,6 +4,7 @@
 import { subpaths, multiply, invert, translation, IDENTITY, isGradient } from '../player/render.js';
 import { pathBounds, boundsIntersect, pointsBounds, simplify } from './geometry.js';
 import { uid, clone } from './document.js';
+import { remapProfile } from '../player/geom.js';
 
 export function getPaper() {
   const p = globalThis.paper;
@@ -154,7 +155,15 @@ export function eraseShape(el, eraser, mode = 'normal') {
       if (Math.abs(res.length - line.length) > 0.01) {
         changed = true;
         const r = fromPaper(res);
-        if (r) strokePart = { ...keepWhole, path: { ...r.path, closed: false }, matrix: multiply(el.matrix, translation(r.cx, r.cy)) };
+        if (r) {
+          strokePart = { ...keepWhole, path: { ...r.path, closed: false }, matrix: multiply(el.matrix, translation(r.cx, r.cy)) };
+          // traço de largura variável: cada pedaço que sobrou mantém a largura que tinha naquele trecho
+          if (el.widthProfile?.length) {
+            const prof = remapProfile(el.path, el.widthProfile, strokePart.path, r.cx, r.cy);
+            if (prof) strokePart.widthProfile = prof;
+            else delete strokePart.widthProfile;
+          }
+        }
       } else strokePart = keepWhole;
     }
   }

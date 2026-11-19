@@ -403,6 +403,7 @@ function buildMenu() {
         { type: 'separator' },
         item('Selecionar tudo', 'selectAll', 'CmdOrCtrl+A'),
         item('Desmarcar tudo', 'deselect', 'CmdOrCtrl+Shift+A'),
+        item('Selecionar mesma cor', 'selectSameColor'),
         { type: 'separator' },
         item('Localizar e substituir…', 'findReplace', 'CmdOrCtrl+F'),
         item('Atalhos de teclado…', 'keyboardShortcuts'),

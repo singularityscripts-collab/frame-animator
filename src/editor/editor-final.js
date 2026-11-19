@@ -9,6 +9,8 @@ import { makeShape, rectPath, unionBounds, pathBounds, localBoxCorners, pointsBo
 import * as V from '../model/vector-ops.js';
 import { layerFrame, symbolById, instanceFrame, multiply, translation, invert, IDENTITY, applyPoint } from '../player/render.js';
 import './rig.js';
+import './editor-points.js';
+import './editor-channels.js';
 import { measureText, textLines, lineHeight } from '../player/assets.js';
 import { clearBitmapCache } from '../player/effects.js';
 

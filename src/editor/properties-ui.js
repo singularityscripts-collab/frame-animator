@@ -7,6 +7,7 @@ import { SYMBOL_TYPES, SOUND_SYNC, LABEL_TYPES } from '../model/document.js';
 import { EASE_LABELS, EASES, applyEase } from '../player/ease.js';
 import { BUILTIN_PRESETS } from './presets.js';
 import { solidOf } from './tools-paint.js';
+import { PRESSURE_CURVE_LABELS, pressureCurveSvgPath } from '../model/stroke.js';
 import { buildRig, refreshRig } from './rig-ui.js';
 import { TOOL_NAMES_FINAL, TOOL_OPTIONS_FINAL, buildFinal, fillFinal, finalSig } from './properties-final.js';
 
@@ -32,11 +33,41 @@ const optRange = (key, min, max, label) => `
     <div class="range-row"><input type="range" min="${min}" max="${max}" data-o="${key}"><input type="number" min="${min}" max="${max}" data-o="${key}"></div>
   </label>`;
 
-const TOOL_OPTIONS = {
-  brush: `${optRange('brush.size', 1, 200, 'Tamanho (px)')}
-    <label class="field wide" style="margin:6px 0"><input type="checkbox" data-o="brush.pressure"><span style="flex:1">Usar pressão da caneta</span></label>
+const optSelect = (key, label, opts) => `
+  <label class="field wide" style="margin-bottom:6px"><span style="flex:1">${label}</span>
+    <select data-o="${key}" style="flex:0 0 150px">${opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>`;
+const optCheck = (key, label) => `<label class="field wide" style="margin:4px 0"><input type="checkbox" data-o="${key}"><span style="flex:1">${label}</span></label>`;
+
+/** Pressão da caneta (curva com prévia) e afinar as pontas: igual no lápis e no pincel. */
+const penBlock = (tool) => `
+  ${optCheck(`${tool}.pressure`, 'Usar pressão da caneta')}
+  <div class="pen-curve-row">
+    <label class="field wide" style="flex:1"><span style="flex:1">Curva de pressão</span>
+      <select data-o="pen.curve" style="flex:0 0 96px">${Object.entries(PRESSURE_CURVE_LABELS).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
+    <svg class="pen-curve" viewBox="-3 -3 66 42" width="66" height="42" aria-label="Prévia da curva de pressão"><path class="pen-curve-axis" d="M0,36 L60,36 M0,0 L0,36"/><path data-pen-curve d=""/></svg>
+  </div>
+  ${optRange(`${tool}.taperStart`, 0, 200, 'Afinar o começo (px)')}
+  ${optRange(`${tool}.taperEnd`, 0, 200, 'Afinar o fim (px)')}`;
+
+const PEN_TOOL_OPTIONS = {
+  brush: `${optSelect('brush.kind', 'Tipo', [['line', 'Linha editável'], ['fill', 'Forma preenchida']])}
+    ${optRange('brush.size', 1, 200, 'Tamanho (px)')}
+    ${penBlock('brush')}
     ${optRange('brush.smoothing', 0, 100, 'Estabilizar')}
-    <p class="hint">Pinta com a cor de preenchimento. Estabilizar tira a tremedeira: a linha tracejada é a corda que puxa o traço. O que aparece enquanto você desenha é o traço final. Alt+clique pega a cor.</p>`,
+    ${optRange('brush.fidelity', 0, 100, 'Fidelidade')}
+    ${optCheck('brush.autoClose', 'Fechar ao voltar ao começo')}
+    ${optCheck('brush.behind', 'Pintar por trás do que já existe')}
+    <p class="hint">Pinta com a cor de preenchimento. <b>Linha editável</b>: o traço vira uma linha com pontos (Subseleção, A) e largura em cada trecho (Largura, U). <b>Forma preenchida</b>: o contorno do traço. Estabilizar tira a tremedeira (a linha tracejada é a corda); Fidelidade baixa dá curvas mais limpas, alta segue cada detalhe. Alt+clique pega a cor.</p>`,
+  pencil: `${optSelect('pencil.mode', 'Modo', [['smooth', 'Suavizar'], ['straighten', 'Endireitar'], ['ink', 'Tinta (como foi feito)']])}
+    ${penBlock('pencil')}
+    ${optRange('pencil.smoothing', 0, 100, 'Estabilizar')}
+    ${optRange('pencil.fidelity', 0, 100, 'Fidelidade')}
+    ${optCheck('pencil.autoClose', 'Fechar ao voltar ao começo')}
+    ${optCheck('pencil.autoFill', 'Preencher formas fechadas')}
+    <p class="hint">Usa a cor e a espessura do traço; com pressão, a espessura é o máximo. Endireitar transforma o rabisco em retas e reconhece linha, retângulo e elipse. A linha fica editável: pontos com a Subseleção (A), largura com a ferramenta Largura (U).</p>`,
+};
+
+const TOOL_OPTIONS = {
   eraser: `${optRange('eraser.size', 2, 200, 'Tamanho (px na tela)')}
     <label class="field wide" style="margin-top:6px"><span style="flex:1">Modo</span>
       <select data-o="eraser.mode" style="flex:0 0 140px"><option value="normal">Normal</option><option value="fills">Só preenchimentos</option><option value="lines">Só linhas</option></select></label>
@@ -51,7 +82,7 @@ const TOOL_OPTIONS = {
 };
 
 Object.assign(TOOL_NAMES, TOOL_NAMES_FINAL);
-Object.assign(TOOL_OPTIONS, TOOL_OPTIONS_FINAL);
+Object.assign(TOOL_OPTIONS, TOOL_OPTIONS_FINAL, PEN_TOOL_OPTIONS);
 
 const STYLE_HTML = `
   <div class="prop-grid">
@@ -72,7 +103,7 @@ export class PropertiesUI {
     this.actions = actions;
     this.el = el;
     this.mode = null;
-    for (const t of ['selection', 'doc', 'style', 'tool', 'load', 'layers', 'context', 'toolOptions', 'presets', 'camera', 'frameSel', 'rig']) editor.on(t, () => this.render());
+    for (const t of ['selection', 'doc', 'style', 'tool', 'load', 'layers', 'context', 'toolOptions', 'presets', 'camera', 'frameSel', 'rig', 'anchors']) editor.on(t, () => this.render());
     editor.on('frame', () => {
       if (!editor.player.playing) this.render();
     });
@@ -96,7 +127,7 @@ export class PropertiesUI {
     }
     // o texto do intervalo selecionado muda com a seleção da timeline
     if (!items.length && ed.hasFrameRange()) mode += `|sel:${JSON.stringify(ed.frameRange())}`;
-    mode += `|${finalSig(ed, items)}|${ed.tool === 'bone' ? 'rig' : ''}`;
+    mode += `|${finalSig(ed, items)}|${ed.tool === 'bone' ? 'rig' : ''}|pts:${ed.tool === 'subselect' ? ed.pointSel?.size || 0 : ''}`;
     if (mode !== this.mode) {
       this.mode = mode;
       this.el.innerHTML = '';
@@ -104,6 +135,46 @@ export class PropertiesUI {
     }
     this.fill(items, span);
     if (ed.tool === 'bone') refreshRig(this);
+  }
+
+  /** Pontos (Subseleção): auto-key, ímã, curvatura, soldar, separar e esconder por quadro. */
+  buildPoints() {
+    const ed = this.editor;
+    const n = ed.pointSel?.size || 0;
+    const sec = this.section(
+      n ? `Pontos (${n} selecionado${n === 1 ? '' : 's'})` : 'Pontos',
+      `<label class="field wide"><input type="checkbox" data-pt="autokey"><span style="flex:1">Auto-key: editar pontos fora do keyframe cria o keyframe</span></label>
+      ${optRange('subselect.magnet', 0, 300, 'Ímã (px): vizinhos vão junto')}
+      ${n ? `<label class="field wide" style="display:block"><span>Curvatura</span>
+        <div class="range-row"><input type="range" min="0" max="200" data-pt="curve"><input type="number" min="0" max="200" data-pt="curve"></div></label>
+      <div class="prop-grid">
+        <button class="btn-flat" data-a="pointsSharp">Pontudo</button>
+        <button class="btn-flat" data-a="pointsSmooth">Suave</button>
+        <button class="btn-flat" data-a="pointsSplit">Separar</button>
+        <button class="btn-flat" data-a="pointsWeld" ${n === 2 ? '' : 'disabled'}>Soldar</button>
+      </div>` : ''}
+      ${n && ed.rigBones().length ? `<label class="field wide" style="margin-top:6px"><span style="flex:1">Prender ao osso</span>
+        <select data-pt="bone" style="flex:0 0 130px">${ed.rigBones().map((b) => `<option value="${b.id}" ${b.id === ed.rigState().selected ? 'selected' : ''}>${esc(b.name || 'Osso')}</option>`).join('')}</select></label>
+      <div class="prop-grid">
+        <button class="btn-flat" data-pt-act="bind" title="Os pontos seguem só este osso (Moho: prender pontos)">Prender pontos</button>
+        <button class="btn-flat" data-pt-act="unbind" title="Os pontos voltam a seguir a mistura dos ossos">Soltar pontos</button>
+      </div>` : ''}
+      <button class="btn-flat full" data-a="toggleHideShape" style="margin-top:6px">Esconder / mostrar forma neste quadro</button>
+      <p class="hint">Copie o keyframe (F6) e mova os pontos: o tween liga ponto a ponto, sem a forma derreter. Com auto-key, mover pontos num quadro sem keyframe cria a chave e o tween sozinho. A linha laranja mostra o caminho de cada ponto selecionado.</p>`,
+    );
+    sec.querySelectorAll('[data-pt-act]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const keys = [...(ed.pointSel || [])];
+        const bone = sec.querySelector('[data-pt="bone"]')?.value || null;
+        ed.bindPoints(keys, b.dataset.ptAct === 'bind' ? bone : null);
+      }),
+    );
+    const auto = sec.querySelector('[data-pt="autokey"]');
+    auto.addEventListener('change', () => ed.setRigState({ autoKey: auto.checked }));
+    sec.querySelectorAll('[data-pt="curve"]').forEach((inp) => {
+      inp.addEventListener('input', () => sec.querySelectorAll('[data-pt="curve"]').forEach((o) => o !== inp && (o.value = inp.value)));
+      inp.addEventListener('change', () => ed.subselectTool?.setCurvature(Math.max(0, Math.min(200, Number(inp.value) || 0))));
+    });
   }
 
   section(title, html) {
@@ -117,6 +188,7 @@ export class PropertiesUI {
   build(items, span) {
     const ed = this.editor;
     if (ed.tool === 'bone') buildRig(this);
+    if (ed.tool === 'subselect' && items.some((it) => it.el.type === 'shape')) this.buildPoints();
     if (items.length) {
       const shapes = items.filter((it) => it.el.type === 'shape');
       const insts = items.filter((it) => it.el.type === 'instance');
@@ -630,6 +702,11 @@ export class PropertiesUI {
       const [tool, key] = inp.dataset.o.split('.');
       set(inp, ed.toolOptions[tool]?.[key]);
     });
+    const ak = this.el.querySelector('[data-pt="autokey"]');
+    if (ak) ak.checked = !!ed.rigState().autoKey;
+    const cv = ed.tool === 'subselect' ? ed.subselectTool?.curvature() : null;
+    this.el.querySelectorAll('[data-pt="curve"]').forEach((inp) => cv != null && document.activeElement !== inp && (inp.value = cv));
+    this.el.querySelectorAll('[data-pen-curve]').forEach((p) => p.setAttribute('d', pressureCurveSvgPath(ed.toolOptions.pen?.curve)));
     fillFinal(this, items);
   }
 }

@@ -67,14 +67,27 @@ export class Editor {
     this.onion = { enabled: false, before: 2, after: 2, outline: false, beforeColor: '#3b82f6', afterColor: '#22c55e' };
     this.loop = true;
     this.toolOptions = {
-      brush: { size: 14, pressure: true, smoothing: 40 },
+      // kind: 'line' = linha central editável com largura por ponto; 'fill' = forma preenchida (contorno)
+      brush: { size: 14, pressure: true, smoothing: 40, kind: 'line', fidelity: 70, taperStart: 0, taperEnd: 0, autoClose: true, behind: false },
       eraser: { size: 24, mode: 'normal', allLayers: false },
       bucket: { gap: 'small' },
       lasso: { mode: 'free' },
       polystar: { style: 'polygon', sides: 5, inner: 50 },
-      pencil: { mode: 'smooth', smoothing: 25 },
+      pencil: { mode: 'smooth', smoothing: 25, pressure: true, fidelity: 70, taperStart: 0, taperEnd: 0, autoClose: true, autoFill: false },
       transform: { mode: 'free' },
+      subselect: { magnet: 0 }, // ímã: raio (px na tela) em que os pontos vizinhos vão junto
+      pen: { curve: 'normal' }, // curva de pressão da caneta (vale para lápis e pincel)
     };
+    try {
+      const saved = JSON.parse(globalThis.localStorage?.getItem('fa-tool-options') || 'null');
+      if (saved && typeof saved === 'object') {
+        for (const [tool, opts] of Object.entries(saved)) {
+          if (this.toolOptions[tool] && opts && typeof opts === 'object') Object.assign(this.toolOptions[tool], opts);
+        }
+      }
+    } catch {
+      // opções salvas ilegíveis: fica o padrão
+    }
     this.multi = { enabled: false, before: 2, after: 2 };
     this.frameSel = null; // intervalo selecionado na timeline: { from, to, layerIds }
     this.frameClipboard = null;
@@ -316,6 +329,12 @@ export class Editor {
 
   setToolOptions(tool, patch) {
     Object.assign(this.toolOptions[tool], patch);
+    // as opções das ferramentas valem entre sessões (curva de pressão, afinar, tamanho…)
+    try {
+      globalThis.localStorage?.setItem('fa-tool-options', JSON.stringify(this.toolOptions));
+    } catch {
+      // sem armazenamento: as opções valem só nesta sessão
+    }
     this.emit('toolOptions');
   }
 
@@ -447,6 +466,22 @@ export class Editor {
   }
   selectAll() {
     this.setSelection(this.frameItems().map((it) => it.el.id));
+  }
+  /**
+   * Seleciona, no quadro, todas as formas com a mesma cor da forma selecionada: o preenchimento
+   * se ela tem preenchimento, senão a cor da linha. Só nas camadas destravadas.
+   */
+  selectSameColor() {
+    const sel = this.selectedItems().find((it) => it.el.type === 'shape');
+    if (!sel) return this.toast('Selecione uma forma para pegar a cor.');
+    const key = (v) => (typeof v === 'string' ? v.toLowerCase() : v ? JSON.stringify(v) : null);
+    const byFill = sel.el.fill != null;
+    const want = key(byFill ? sel.el.fill : sel.el.stroke);
+    const ids = this.frameItems()
+      .filter((it) => it.el.type === 'shape' && !it.layer.locked && key(byFill ? it.el.fill : it.el.stroke) === want)
+      .map((it) => it.el.id);
+    this.setSelection(ids);
+    this.toast(`${ids.length} forma${ids.length === 1 ? '' : 's'} com ${byFill ? 'o mesmo preenchimento' : 'a mesma cor de linha'}.`);
   }
   deselect() {
     this.setSelection([]);

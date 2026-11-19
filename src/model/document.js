@@ -100,8 +100,18 @@ export function createInstance(symbol, matrix = [1, 0, 0, 1, 0, 0]) {
 }
 
 /** Cópia de elementos com ids novos (para keyframes duplicados e colar). */
+/**
+ * Cópia com ids novos (keyframe novo, colar quadros…). Formas guardam de qual desenho vieram
+ * (lineage): duas chaves do mesmo desenho, com a mesma estrutura de pontos, fazem o tween ponto a ponto.
+ */
 export function cloneElementsWithNewIds(elements) {
-  return elements.map((el) => ({ ...clone(el), id: uid('e') }));
+  return elements.map((el) => withLineage(el, { ...clone(el), id: uid('e') }));
+}
+
+/** Marca a cópia de uma forma com a origem (o id do desenho original). */
+export function withLineage(src, copy) {
+  if (src.type === 'shape') copy.lineage = src.lineage || src.id;
+  return copy;
 }
 
 // ---------- percorrer o documento ----------

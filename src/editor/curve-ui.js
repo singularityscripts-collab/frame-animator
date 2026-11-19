@@ -11,6 +11,10 @@ import { curveY, EASES, EASE_LABELS } from '../player/ease.js';
  * opts.duration (motion), opts.evaluate(id, points, x) → y (para desenhar exatamente como o player)
  * Resolve com Map(id → points) das propriedades alteradas, ou null.
  */
+// curva copiada (vale entre propriedades e entre tweens, enquanto o app estiver aberto)
+let curveClipboard = null;
+const CURVE_COLORS = ['#4f9dff', '#ff9f0a', '#30d158', '#ff375f', '#bf5af2', '#64d2ff', '#ffd60a'];
+
 export function openCurveEditor(opts) {
   const dlg = document.createElement('dialog');
   dlg.className = 'fa-dialog wide';
@@ -33,11 +37,15 @@ export function openCurveEditor(opts) {
               ? `<label class="tl-opt">Partir de <select data-a="preset" class="lib-search" style="width:220px"><option value="">—</option>${Object.entries(EASE_LABELS)
                   .map(([k, l]) => `<option value="${k}">${esc(l)}</option>`)
                   .join('')}</select></label>`
-              : '<button class="btn-flat" data-a="clear">Tirar todas as keys</button>'
+              : `<button class="btn-flat" data-a="clear">Tirar todas as keys</button>
+                 <label class="tl-opt" title="Mostra todas as curvas na mesma altura, para comparar o tempo delas"><input type="checkbox" data-a="norm"> Normalizar</label>`
           }
+          <button class="btn-flat" data-a="fit" title="Mostra a curva inteira (F)">Ajustar à tela</button>
+          <button class="btn-flat" data-a="copy" title="Copia a curva desta propriedade">Copiar curva</button>
+          <button class="btn-flat" data-a="paste" title="Cola a curva copiada nesta propriedade">Colar curva</button>
         </div>
         <p class="dlg-text" data-info style="min-height:1.5em;margin:6px 0 0"></p>
-        <p class="dlg-text" style="margin-top:6px">Duplo clique na área cria um ponto. Arraste pontos e alças. ${isEase ? 'Eixo horizontal: tempo; vertical: quanto do caminho já foi feito.' : 'Eixo horizontal: quadros do tween.'}</p>
+        <p class="dlg-text" style="margin-top:6px">Duplo clique na área cria um ponto. Arraste pontos e alças. ${isEase ? 'Eixo horizontal: tempo; vertical: quanto do caminho já foi feito.' : 'Eixo horizontal: quadros do tween. As outras propriedades aparecem apagadas por trás (clique no nome para editar).'} Roda do mouse: zoom no tempo · Shift+roda: zoom no valor.</p>
       </div>
     </div>
     <div class="dlg-actions"><button class="btn-flat" data-cancel>Cancelar</button><button class="btn-primary" data-ok>Aplicar</button></div>`;
@@ -50,7 +58,7 @@ export function openCurveEditor(opts) {
   function renderList() {
     if (!listEl) return;
     listEl.innerHTML = props
-      .map((p, i) => `<button class="curve-prop ${p === cur ? 'on' : ''} ${p.points.length ? 'has' : ''}" data-i="${i}">${esc(p.label)}</button>`)
+      .map((p, i) => `<button class="curve-prop ${p === cur ? 'on' : ''} ${p.points.length ? 'has' : ''}" data-i="${i}"><span class="curve-swatch" style="background:${CURVE_COLORS[i % CURVE_COLORS.length]}"></span>${esc(p.label)}</button>`)
       .join('');
     listEl.querySelectorAll('button').forEach((b) =>
       b.addEventListener('click', () => {
@@ -65,7 +73,28 @@ export function openCurveEditor(opts) {
   // ---------- coordenadas ----------
   const PAD = 34;
   let view = { x0: 0, x1: 1, y0: 0, y1: 1 };
+  let norm = false;
+  /** Faixa de valores de cada propriedade (para normalizar). */
+  const rangeOf = (p) => {
+    const ys = p.points.length ? p.points.map((q) => q.y) : [p.base ?? 0];
+    let lo = Math.min(...ys), hi = Math.max(...ys);
+    if (hi - lo < 1e-6) {
+      lo -= 1;
+      hi += 1;
+    }
+    return { lo, hi };
+  };
+  let ranges = new Map();
+  const freezeRanges = () => (ranges = new Map(props.map((p) => [p, rangeOf(p)])));
+  // valor ↔ altura na vista (normalizado: cada curva em 0–1 na faixa dela)
+  const toV = (p, y) => (norm ? (y - ranges.get(p).lo) / (ranges.get(p).hi - ranges.get(p).lo) : y);
+  const fromV = (p, v) => (norm ? ranges.get(p).lo + v * (ranges.get(p).hi - ranges.get(p).lo) : v);
   function fitView() {
+    if (norm && !isEase) {
+      freezeRanges();
+      view = { x0: 0, x1: Math.max(1, opts.duration - 1), y0: -0.15, y1: 1.15 };
+      return;
+    }
     if (isEase) {
       const ys = cur.points.flatMap((p) => [p.y, p.y + (p.iy || 0), p.y + (p.oy || 0)]);
       view = { x0: 0, x1: 1, y0: Math.min(-0.1, ...ys) - 0.05, y1: Math.max(1.1, ...ys) + 0.05 };
@@ -117,14 +146,32 @@ export function openCurveEditor(opts) {
       ctx.stroke();
       ctx.fillText(Math.abs(y) >= 100 ? y.toFixed(0) : y.toFixed(isEase ? 2 : 1), 2, sy(y) + 3);
     }
+    // as outras propriedades por trás (apagadas), cada uma na cor dela
+    const steps = Math.max(60, Math.round(W()));
+    if (!isEase) {
+      props.forEach((p, pi) => {
+        if (p === cur || !p.points.length) return;
+        if (!norm && !ranges.size) freezeRanges();
+        ctx.strokeStyle = CURVE_COLORS[pi % CURVE_COLORS.length];
+        ctx.globalAlpha = norm ? 0.55 : 0.25;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let i = 0; i <= steps; i++) {
+          const x = view.x0 + ((view.x1 - view.x0) * i) / steps;
+          const y = toV(p, opts.evaluate ? opts.evaluate(p.id, p.points, x) : curveY(p.points, x));
+          i ? ctx.lineTo(sx(x), sy(y)) : ctx.moveTo(sx(x), sy(y));
+        }
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      });
+    }
     // curva
-    ctx.strokeStyle = '#4f9dff';
+    ctx.strokeStyle = isEase ? '#4f9dff' : CURVE_COLORS[props.indexOf(cur) % CURVE_COLORS.length];
     ctx.lineWidth = 2;
     ctx.beginPath();
-    const steps = Math.max(60, Math.round(W()));
     for (let i = 0; i <= steps; i++) {
       const x = view.x0 + ((view.x1 - view.x0) * i) / steps;
-      const y = cur.points.length || isEase ? valueAt(x) : cur.base;
+      const y = toV(cur, cur.points.length || isEase ? valueAt(x) : cur.base);
       i ? ctx.lineTo(sx(x), sy(y)) : ctx.moveTo(sx(x), sy(y));
     }
     ctx.stroke();
@@ -139,19 +186,19 @@ export function openCurveEditor(opts) {
         ]) {
           if (!hx && !hy) continue;
           ctx.beginPath();
-          ctx.moveTo(sx(p.x), sy(p.y));
-          ctx.lineTo(sx(p.x + hx), sy(p.y + hy));
+          ctx.moveTo(sx(p.x), sy(toV(cur, p.y)));
+          ctx.lineTo(sx(p.x + hx), sy(toV(cur, p.y + hy)));
           ctx.stroke();
           ctx.fillStyle = '#ffd60a';
           ctx.beginPath();
-          ctx.arc(sx(p.x + hx), sy(p.y + hy), 4, 0, Math.PI * 2);
+          ctx.arc(sx(p.x + hx), sy(toV(cur, p.y + hy)), 4, 0, Math.PI * 2);
           ctx.fill();
         }
       }
       ctx.fillStyle = i === sel ? '#ffd60a' : '#ffffff';
       ctx.strokeStyle = '#000';
-      ctx.fillRect(sx(p.x) - 4, sy(p.y) - 4, 8, 8);
-      ctx.strokeRect(sx(p.x) - 4, sy(p.y) - 4, 8, 8);
+      ctx.fillRect(sx(p.x) - 4, sy(toV(cur, p.y)) - 4, 8, 8);
+      ctx.strokeRect(sx(p.x) - 4, sy(toV(cur, p.y)) - 4, 8, 8);
     });
     const p = cur.points[sel];
     info.textContent = p ? (isEase ? `tempo ${p.x.toFixed(2)} · progresso ${p.y.toFixed(2)}` : `quadro ${Math.round(p.x) + 1} · valor ${p.y.toFixed(2)}`) : cur.points.length ? '' : 'Sem keys nesta propriedade.';
@@ -163,12 +210,12 @@ export function openCurveEditor(opts) {
     if (p) {
       for (const which of ['in', 'out']) {
         const hx = which === 'in' ? p.ix || 0 : p.ox || 0, hy = which === 'in' ? p.iy || 0 : p.oy || 0;
-        if ((hx || hy) && Math.hypot(sx(p.x + hx) - px, sy(p.y + hy) - py) <= 7) return { type: which, i: sel };
+        if ((hx || hy) && Math.hypot(sx(p.x + hx) - px, sy(toV(cur, p.y + hy)) - py) <= 7) return { type: which, i: sel };
       }
     }
     for (let i = cur.points.length - 1; i >= 0; i--) {
       const q = cur.points[i];
-      if (Math.abs(sx(q.x) - px) <= 6 && Math.abs(sy(q.y) - py) <= 6) return { type: 'point', i };
+      if (Math.abs(sx(q.x) - px) <= 6 && Math.abs(sy(toV(cur, q.y)) - py) <= 6) return { type: 'point', i };
     }
     return null;
   }
@@ -195,7 +242,7 @@ export function openCurveEditor(opts) {
     const p = cur.points[h.i];
     const move = (ev) => {
       const q = local(ev);
-      const x = wx(q.px), y = wy(q.py);
+      const x = wx(q.px), y = fromV(cur, wy(q.py));
       cur.dirty = true;
       if (h.type === 'point') {
         const prev = cur.points[h.i - 1], next = cur.points[h.i + 1];
@@ -222,13 +269,31 @@ export function openCurveEditor(opts) {
     const up = () => {
       canvas.removeEventListener('pointermove', move);
       canvas.removeEventListener('pointerup', up);
-      fitView();
+      if (!norm) fitView();
       draw();
     };
     canvas.addEventListener('pointermove', move);
     canvas.addEventListener('pointerup', up);
     draw();
   });
+
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const { px, py } = local(e);
+    const k = e.deltaY < 0 ? 0.8 : 1.25;
+    if (e.shiftKey) {
+      const c = wy(py);
+      view = { ...view, y0: c + (view.y0 - c) * k, y1: c + (view.y1 - c) * k };
+    } else {
+      const c = wx(px);
+      view = { ...view, x0: c + (view.x0 - c) * k, x1: c + (view.x1 - c) * k };
+      if (view.x1 - view.x0 < (isEase ? 0.05 : 2)) {
+        const m = (view.x0 + view.x1) / 2, h = isEase ? 0.025 : 1;
+        view = { ...view, x0: m - h, x1: m + h };
+      }
+    }
+    draw();
+  }, { passive: false });
 
   canvas.addEventListener('dblclick', (e) => {
     const { px } = local(e);
@@ -272,9 +337,38 @@ export function openCurveEditor(opts) {
 
   dlg.querySelectorAll('[data-a]').forEach((b) => {
     const a = b.dataset.a;
-    const ev = a === 'preset' ? 'change' : 'click';
+    const ev = a === 'preset' || a === 'norm' ? 'change' : 'click';
     b.addEventListener(ev, () => {
       const p = cur.points[sel];
+      if (a === 'norm') {
+        norm = b.checked;
+        sel = -1;
+        fitView();
+        return draw();
+      }
+      if (a === 'fit') {
+        fitView();
+        return draw();
+      }
+      if (a === 'copy') {
+        curveClipboard = { points: structuredClone(cur.points), ease: isEase };
+        info.textContent = cur.points.length ? 'Curva copiada.' : 'Esta propriedade não tem keys para copiar.';
+        return;
+      }
+      if (a === 'paste') {
+        if (!curveClipboard || curveClipboard.ease !== isEase) {
+          info.textContent = 'Copie uma curva antes (do mesmo tipo de editor).';
+          return;
+        }
+        cur.points = structuredClone(curveClipboard.points);
+        // colada num tween mais curto: as keys que passam do fim ficam no último quadro
+        if (!isEase) {
+          const n = Math.max(0, opts.duration - 1);
+          const seen = new Set();
+          cur.points = cur.points.map((q) => ({ ...q, x: Math.min(n, q.x) })).filter((q) => (seen.has(q.x) ? false : seen.add(q.x)));
+        }
+        sel = -1;
+      }
       if (a === 'smooth' && p) smoothSel(p, sel);
       if (a === 'corner' && p) Object.assign(p, { ix: 0, iy: 0, ox: 0, oy: 0 });
       if (a === 'del' && p) {
@@ -309,6 +403,11 @@ export function openCurveEditor(opts) {
       resolve(v);
     };
     const onKey = (e) => {
+      if ((e.key === 'f' || e.key === 'F') && document.activeElement?.tagName !== 'INPUT') {
+        fitView();
+        draw();
+        return;
+      }
       if ((e.key === 'Delete' || e.key === 'Backspace') && sel >= 0 && document.activeElement?.tagName !== 'INPUT') {
         e.preventDefault();
         e.stopPropagation();

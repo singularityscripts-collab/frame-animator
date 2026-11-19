@@ -5,6 +5,7 @@
 
 import { clone, cloneElementsWithNewIds } from './document.js';
 import { tweenElements, motionElement, motionPropsAt, MOTION_PROPS, applyEase, lerpHex } from '../player/tween.js';
+import { lerpPose } from '../player/bones.js';
 
 export function normalize(frames) {
   let start = 0;
@@ -33,6 +34,19 @@ export function poseAt(fr, i, offset) {
   const next = s.tween ? fr[i + 1] : null;
   if (next && offset > 0) return tweenElements(s, next, offset);
   return s.elements;
+}
+
+/**
+ * Esqueleto de um keyframe novo tirado do trecho i, offset quadros depois do começo: os mesmos ossos,
+ * com a pose do quadro (interpolada, se o trecho tem tween). Sem isso, a chave nova perdia o rig.
+ */
+function armatureAtSpan(fr, i, offset) {
+  const s = fr[i];
+  if (!s.armature) return undefined;
+  const next = fr[i + 1];
+  let pose = s.armature.pose || {};
+  if (s.tween && next?.armature && offset > 0) pose = lerpPose(pose, next.armature.pose || {}, applyEase(Math.min(1, offset / s.duration), s.tween));
+  return clone({ ...s.armature, pose });
 }
 
 function cameraAtSpan(fr, i, offset) {
@@ -76,6 +90,7 @@ function splitSpan(fr, i, frame, { blank = false, keepTween = true } = {}) {
   const span = { start: frame, duration: end - frame, elements: blank ? [] : cloneElementsWithNewIds(poseAt(fr, i, o)) };
   if (!blank) {
     if (s.camera) span.camera = cameraAtSpan(fr, i, o);
+    if (s.armature) span.armature = armatureAtSpan(fr, i, o);
     if (s.tween && keepTween) {
       if (s.tween.type === 'motion') {
         const [l, r] = splitMotion(s, o);
@@ -113,9 +128,11 @@ function splitAt(fr, frame, blank) {
     const last = fr[li];
     const pose = blank ? [] : cloneElementsWithNewIds(poseAt(fr, li, last.duration - 1));
     const cam = last.camera ? cameraAtSpan(fr, li, last.duration - 1) : undefined;
+    const arm = !blank && last.armature ? armatureAtSpan(fr, li, last.duration) : undefined;
     last.duration += frame - len;
     const span = { start: frame, duration: 1, elements: pose };
     if (cam) span.camera = cam;
+    if (arm) span.armature = arm;
     fr.push(span);
     return true;
   }
@@ -345,4 +362,47 @@ export function moveRange(frames, from, to, delta, { copy = false } = {}) {
   const base = copy ? clone(frames) : blankRange(frames, from, to);
   const r = insertSpans(base, dest, slice, { overwrite: true });
   return { frames: r.frames, frame: dest };
+}
+
+/**
+ * Estica ou encolhe o intervalo [from, to] (factor 2 = o dobro de quadros): as chaves de dentro
+ * ficam proporcionalmente mais longe ou mais perto, e tudo que vem depois anda junto.
+ * Encolhendo, chaves que caem no mesmo quadro ficam só com a primeira. As keys de motion tween
+ * acompanham a duração nova do trecho. Devolve os quadros novos ou null.
+ */
+export function retimeFrames(frames, from, to, factor) {
+  if (!(factor > 0) || to < from) return null;
+  const oldLen = to - from + 1;
+  const newLen = Math.max(1, Math.round(oldLen * factor));
+  if (newLen === oldLen) return null;
+  const delta = newLen - oldLen;
+  const map = (p) => (p <= from ? p : p >= to + 1 ? p + delta : from + Math.round(((p - from) * newLen) / oldLen));
+  const fr = clone(frames);
+  const kept = [];
+  for (const s of fr) {
+    const ns = map(s.start);
+    const prev = kept[kept.length - 1];
+    // caiu no mesmo quadro da chave anterior: fica a anterior, que passa a ir até onde esta ia
+    if (prev && ns <= prev.ns) {
+      prev.end = Math.max(prev.end, map(s.start + s.duration));
+      continue;
+    }
+    kept.push({ s, ns, end: map(s.start + s.duration) });
+  }
+  const out = kept.map((k, i) => {
+    const next = kept[i + 1];
+    const dur = Math.max(1, (next ? next.ns : Math.max(k.end, k.ns + 1)) - k.ns);
+    const s = k.s;
+    if (s.tween?.type === 'motion' && dur !== s.duration) {
+      const r = dur / s.duration;
+      for (const [p, keys] of Object.entries(s.tween.props || {})) {
+        const seen = new Set();
+        s.tween.props[p] = keys
+          .map((key) => ({ ...key, t: Math.max(0, Math.min(dur - 1, Math.round(key.t * r))) }))
+          .filter((key) => (seen.has(key.t) ? false : seen.add(key.t)));
+      }
+    }
+    return { ...s, start: k.ns, duration: dur };
+  });
+  return normalize(out);
 }

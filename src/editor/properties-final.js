@@ -32,9 +32,6 @@ const optSelect = (key, label, opts) => `
     <select data-o="${key}" style="flex:0 0 150px">${opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>`;
 
 export const TOOL_OPTIONS_FINAL = {
-  pencil: `${optSelect('pencil.mode', 'Modo', [['smooth', 'Suavizar'], ['straighten', 'Endireitar'], ['ink', 'Tinta (como foi feito)']])}
-    ${optRange('pencil.smoothing', 0, 100, 'Estabilizar')}
-    <p class="hint">Endireitar transforma o rabisco em retas e reconhece linha, retângulo e elipse.</p>`,
   lasso: `${optSelect('lasso.mode', 'Modo', [['free', 'Livre'], ['polygon', 'Poligonal']])}
     <p class="hint">Poligonal: clique ponto a ponto e feche no primeiro ponto, com duplo clique ou Enter. Shift soma à seleção.</p>`,
   polystar: `${optSelect('polystar.style', 'Estilo', [['polygon', 'Polígono'], ['star', 'Estrela']])}
