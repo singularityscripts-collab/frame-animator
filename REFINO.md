@@ -808,3 +808,4 @@ A caneta simulada da Etapa 2 não pegou o problema, porque eventos sintéticos n
 - **Etapa V5:** interpolação por chave com símbolos, canais por camada, editor de curvas com várias curvas (normalizar, zoom, copiar/colar), ruído e ciclo sem chaves, esticar/encolher quadros e marcadores na régua.
   - 135 testes passando, `npm run check` e `npm run smoke` ok.
 - **Versão 0.3.0** (19/11/2026): etapas V1 a V5 publicadas no GitHub como release, com instalador e atualização automática.
+- **Versão 0.3.1** (19/11/2026): corrigida a atualização pelo app, que falhava com "arquivo em uso". O instalador herdava do app a pasta atual (dentro da pasta de instalação) e o Windows não deixava trocar a pasta. Agora ele sai dela ao abrir, espera os processos auxiliares do app fecharem e apaga a cópia nova se algo falhar.

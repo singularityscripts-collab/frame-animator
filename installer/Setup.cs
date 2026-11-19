@@ -131,6 +131,16 @@ static class Engine
         Thread.Sleep(400);
     }
 
+    /** Depois do processo principal, os processos auxiliares do app (GPU, renderização) ainda levam um instante para fechar. */
+    static void WaitForHelpers(string dir, Progress report)
+    {
+        for (int i = 0; i < 50 && RunningFrom(dir); i++)
+        {
+            if (i == 3) report(0, "Esperando o Frame Animator fechar…", "");
+            Thread.Sleep(400);
+        }
+    }
+
     /** Tira a versão antiga instalada pelo instalador anterior (0.1.x), se houver. */
     static void RemoveLegacy(Progress report)
     {
@@ -193,10 +203,10 @@ static class Engine
         }
     }
 
-    static void Retry(Action a, string failMsg)
+    static void Retry(Action a, string failMsg, int tries = 12)
     {
         Exception last = null;
-        for (int i = 0; i < 12; i++)
+        for (int i = 0; i < tries; i++)
         {
             try { a(); return; }
             catch (Exception e) { last = e; Thread.Sleep(400); }
@@ -218,7 +228,11 @@ static class Engine
     public static string Install(string target, bool desktop, Options o, Progress report)
     {
         string dir = o.Update && o.Dir != null ? System.IO.Path.GetFullPath(o.Dir) : SafeTarget(target);
-        if (o.Update) WaitForPid(o.Pid, report);
+        if (o.Update)
+        {
+            WaitForPid(o.Pid, report);
+            WaitForHelpers(dir, report);
+        }
         else if (RunningFrom(dir)) throw new InstallError("O Frame Animator está aberto. Feche o app e clique em Tentar de novo.");
         if (!o.Update) RemoveLegacy(report);
 
@@ -273,12 +287,18 @@ static class Engine
         if (Directory.Exists(dir))
         {
             old = dir + ".antigo-" + DateTime.Now.Ticks;
-            Retry(delegate { Directory.Move(dir, old); }, "Não deu para trocar os arquivos: algum arquivo do Frame Animator está em uso. Feche o app e tente de novo.");
+            try { Retry(delegate { Directory.Move(dir, old); }, "Não deu para trocar os arquivos: algum arquivo do Frame Animator está em uso. Feche o app e tente de novo.", 30); }
+            catch
+            {
+                TryDelete(tmp); // não deixa a cópia nova sobrando ao lado da pasta do app
+                throw;
+            }
         }
         try { Retry(delegate { Directory.Move(tmp, dir); }, "Não deu para mover os arquivos novos para a pasta de instalação."); }
         catch
         {
             if (old != null) try { Directory.Move(old, dir); } catch { }
+            TryDelete(tmp);
             throw;
         }
         if (old != null) TryDelete(old);
@@ -966,6 +986,10 @@ static class App
     static int Main(string[] args)
     {
         var o = Options.Parse(args);
+        // Quem abre o instalador passa a pasta atual dele (o app abre o atualizador com a pasta atual
+        // dentro da pasta de instalação). No Windows, um processo com a pasta atual numa pasta impede
+        // que ela seja renomeada ou apagada: sai dela antes de tudo.
+        try { Environment.CurrentDirectory = System.IO.Path.GetTempPath(); } catch { }
         bool hasPayload = Assembly.GetExecutingAssembly().GetManifestResourceInfo("payload.zip") != null;
         bool uninstall = !hasPayload;
 
@@ -981,7 +1005,7 @@ static class App
                 File.Copy(me, tmp, true);
                 var list = new List<string> { "--from-temp", "\"" + dir + "\"" };
                 if (o.Silent) list.Add("--silent");
-                Process.Start(new ProcessStartInfo(tmp, string.Join(" ", list.ToArray())) { UseShellExecute = false });
+                Process.Start(new ProcessStartInfo(tmp, string.Join(" ", list.ToArray())) { UseShellExecute = false, WorkingDirectory = System.IO.Path.GetTempPath() });
                 return 0;
             }
             catch

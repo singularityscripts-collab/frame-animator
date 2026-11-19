@@ -139,7 +139,8 @@ function cancel() {
 function install() {
   if (!downloaded) throw new Error('baixe a atualização primeiro');
   const exe = process.execPath;
-  const child = spawn(downloaded, ['--update', '--dir', path.dirname(exe), '--pid', String(process.pid)], { detached: true, stdio: 'ignore' });
+  // cwd fora da pasta do app: um processo com a pasta atual dentro dela impede o Windows de trocá-la
+  const child = spawn(downloaded, ['--update', '--dir', path.dirname(exe), '--pid', String(process.pid)], { detached: true, stdio: 'ignore', cwd: path.dirname(downloaded) });
   child.unref();
   setTimeout(() => app.quit(), 300);
 }
