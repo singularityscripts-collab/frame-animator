@@ -12,7 +12,7 @@ import {
   isGradient,
   IDENTITY,
 } from '../player/render.js';
-import { makeShape } from '../model/geometry.js';
+import { makeShape, fitGradient, pathBounds } from '../model/geometry.js';
 import { clone } from '../model/document.js';
 import { floodFill, traceContours, polygonArea } from '../model/raster.js';
 import * as V from '../model/vector-ops.js';
@@ -198,6 +198,8 @@ export function brushTool(stage, editor) {
         if (res) {
           const el = makeShape({ path: res.path, cx: res.cx, cy: res.cy, fill: null, stroke: color, strokeWidth: o.size });
           if (res.profile) el.widthProfile = res.profile;
+          // preenchimento em gradiente: a linha leva o gradiente (a cor sólida fica de reserva)
+          if (isGradient(editor.style.fill)) el.strokeGradient = fitGradient(editor.style.fill, pathBounds(res.path));
           editor.addElements([el], 'Pincel', index);
           return;
         }
@@ -310,7 +312,9 @@ export function eraserTool(stage, editor) {
       stage.unfreeze();
       try {
         const region = V.cleanOutline(V.strokeOutline(p), 0.05 / stage.scale);
-        const r = editor.eraseRegion(region, opts().mode, { allLayers: !!opts().allLayers });
+        // linhas: a borracha corta onde encosta na borda (engorda pela meia largura de cada linha)
+        const grow = (pad) => V.cleanOutline(V.strokeOutline(p.map((q) => ({ ...q, w: q.w + 2 * pad }))), 0.05 / stage.scale);
+        const r = editor.eraseRegion(region, opts().mode, { allLayers: !!opts().allLayers, grow });
         if (r?.skippedRig) editor.toast('Partes que dobram com os ossos só podem ser apagadas num quadro com a pose zerada.');
       } catch (err) {
         console.error(err);
@@ -344,12 +348,14 @@ export function bucketTool(stage, editor) {
       const fill = editor.style.fill;
       // 1) clicou dentro de uma forma fechada: troca o preenchimento dela
       const hit = stage.hitTest(e.wx, e.wy);
-      if (hit?.el.type === 'shape' && hit.el.path.closed && stage.pointInFill(hit, e.wx, e.wy)) {
+      const inFill = hit?.el.type === 'shape' && hit.el.path.closed && stage.pointInFill(hit, e.wx, e.wy);
+      const recolor = () =>
         editor.updateItems([hit], 'Balde de tinta', (el) => {
           el.fill = applyFill(el, fill);
         });
-        return;
-      }
+      // forma da camada ativa: troca a cor. Forma de outra camada (o fundo, por exemplo): primeiro
+      // tenta preencher a área fechada pelas linhas na camada ativa; sem área fechada, repinta a forma.
+      if (inFill && hit.layer.id === editor.activeLayerId) return recolor();
       // 2) área vazia cercada por linhas: cria uma forma nova por baixo.
       // Rasteriza a parte visível numa resolução própria (mais fina que a tela quando o zoom é baixo).
       const { canvas, k, x0, y0 } = renderForFill(stage);
@@ -361,6 +367,7 @@ export function bucketTool(stage, editor) {
       const gapScreen = GAP_SIZES[editor.toolOptions.bucket.gap] ?? 3;
       const gap = Math.min(24, Math.round((gapScreen * k) / stage.scale));
       const r = floodFill(ink, w, h, (e.wx - x0) * k, (e.wy - y0) * k, gap);
+      if (r.status !== 'ok' && inFill) return recolor();
       if (r.status === 'ink') return editor.toast('Clique numa área vazia cercada por linhas, ou dentro de uma forma.');
       if (r.status === 'open') return editor.toast('A área não está fechada. Aumente "Fechar lacunas" nas propriedades do balde.');
       const loops = traceContours(r.region, w, h)
@@ -573,7 +580,16 @@ function renderForFill(stage) {
   const inScene = !editor.editStack.length;
   const c0inv = inScene ? invert(editor.sceneCameraMatrix()) || IDENTITY : IDENTITY;
   ctx.setTransform(...multiply([k, 0, 0, k, -x0 * k, -y0 * k], c0inv));
-  renderTimeline(ctx, editor.doc, editor.timeline, editor.frame, { camera: inScene });
+  const src = editor.toolOptions.bucket?.source || 'all';
+  const tl = editor.timeline;
+  // "all": a camada ativa inteira + só as linhas das outras camadas visíveis (o fundo pintado não atrapalha)
+  const only = (l) => ({
+    ...l,
+    frames: l.frames.map((s) => ({ ...s, elements: s.elements.filter((e) => e.type === 'shape' && e.stroke && e.strokeWidth > 0).map((e) => ({ ...e, fill: null })) })),
+  });
+  const keep = (l) => l.id === editor.activeLayerId || l.type === 'folder' || l.type === 'camera';
+  const layers = tl.layers.filter((l) => src === 'all' || keep(l)).map((l) => (keep(l) ? l : only(l)));
+  renderTimeline(ctx, editor.doc, { ...tl, layers }, editor.frame, { camera: inScene });
   return { canvas: c, k, x0, y0 };
 }
 

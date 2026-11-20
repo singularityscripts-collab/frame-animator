@@ -3,6 +3,7 @@
 // de um campo numérico para mudar o valor (scrub) e cursores próprios por ferramenta.
 
 import { esc, showContextMenu } from './ui-kit.js';
+import { isSwitch, switchDrawings } from './editor-switch.js';
 import { ACTION_LABELS } from './actions-final.js';
 import { ALL_TOOLS } from './toolbar-ui.js';
 
@@ -104,6 +105,18 @@ export function installStatusBar(editor, stage) {
 }
 
 // ---------- menu de clique direito no palco ----------
+/** Troca de desenhos no menu do palco: escolher o desenho e criar outro. */
+function switchStageItems(editor, actions, e, el) {
+  const sym = editor.symbol(el.symbolId);
+  if (!isSwitch(sym)) return [];
+  const ds = switchDrawings(sym);
+  return [
+    { label: 'Trocar desenho ▸', run: () => showContextMenu(e.clientX, e.clientY, ds.map((d, i) => ({ label: d.name, run: () => editor.switchTo(i) }))) },
+    { label: 'Próximo desenho', hint: actions.keysOf('switchNext')[0] || '', run: () => actions.run('switchNext') },
+    { label: 'Novo desenho (cópia)', run: () => actions.run('switchAddCopy') },
+  ];
+}
+
 export function installStageMenu(editor, stage, actions) {
   const canvas = stage.canvas;
   canvas.addEventListener('contextmenu', (e) => {
@@ -118,7 +131,7 @@ export function installStageMenu(editor, stage, actions) {
     const el = items.length === 1 ? items[0].el : null;
     if (items.length) {
       showContextMenu(e.clientX, e.clientY, [
-        ...(el?.type === 'instance' ? [{ label: 'Editar símbolo', hint: k('editSymbol'), run: run('editSymbol') }, '-'] : []),
+        ...(el?.type === 'instance' ? [{ label: 'Editar símbolo', hint: k('editSymbol'), run: run('editSymbol') }, ...switchStageItems(editor, actions, e, el), '-'] : []),
         ...(el?.type === 'shape' ? [{ label: 'Editar pontos', hint: 'A', run: () => editor.setTool('subselect') }, '-'] : []),
         { label: 'Recortar', hint: k('cut'), run: run('cut') },
         { label: 'Copiar', hint: k('copy'), run: run('copy') },

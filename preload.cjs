@@ -26,6 +26,15 @@ contextBridge.exposeInMainWorld('api', {
   onCloseRequested: (fn) => ipcRenderer.on('app:close-requested', () => fn()),
   version: () => ipcRenderer.invoke('app:version'),
   openUrl: (url) => ipcRenderer.send('shell:open-url', url),
+  characters: {
+    list: () => ipcRenderer.invoke('character:list'),
+    save: (o) => ipcRenderer.invoke('character:save', o),
+    load: (file) => ipcRenderer.invoke('character:load', file),
+    remove: (file) => ipcRenderer.invoke('character:delete', file),
+    exportFile: (o) => ipcRenderer.invoke('character:export', o),
+    importFile: () => ipcRenderer.invoke('character:import'),
+    reveal: () => ipcRenderer.send('character:reveal'),
+  },
   update: {
     check: () => ipcRenderer.invoke('update:check'),
     download: () => ipcRenderer.invoke('update:download'),

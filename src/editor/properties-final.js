@@ -5,6 +5,7 @@ import { esc } from './ui-kit.js';
 import { BLEND_LABELS, FILTER_DEFAULTS, FILTER_LABELS } from '../player/effects.js';
 import { FONTS } from '../player/assets.js';
 import { clone } from '../model/document.js';
+import { switchSection, switchSig } from './actions-switch.js';
 
 export const TOOL_NAMES_FINAL = {
   subselect: 'Subseleção',
@@ -57,7 +58,7 @@ export const TOOL_OPTIONS_FINAL = {
 export function finalSig(ed, items) {
   const el = items[0]?.el;
   if (!el) return `${ed.tool}`;
-  return [el.type, el.kind, (el.filters || []).map((f) => f.type).join(','), el.brush?.type, el.behavior, items.length, el.bone || el.skin ? 1 : 0, el.warp?.pins?.length || 0].join(':');
+  return [el.type, el.kind, (el.filters || []).map((f) => f.type).join(','), el.brush?.type, el.behavior, items.length, el.bone || el.skin ? 1 : 0, el.warp?.pins?.length || 0, items.length === 1 ? switchSig(ed, el) : ''].join(':');
 }
 
 const num = (k, label, min, max, step = 1) =>
@@ -189,10 +190,11 @@ export function buildFinal(ui, items) {
             : ''
         }
         <button class="btn-flat" data-a="scale9" style="grid-column:span 2">Escala de 9 fatias${sym?.scale9 ? ' (ligada)' : ''}…</button>
-        ${el.behavior === 'graphic' || !el.behavior ? '<button class="btn-flat" data-a="framePicker" style="grid-column:span 2">Seletor de quadro…</button><button class="btn-flat" data-a="lipSync" style="grid-column:span 2">Lip-sync automático…</button>' : ''}
+        ${el.behavior === 'graphic' || !el.behavior ? '<button class="btn-flat" data-a="framePicker" style="grid-column:span 2">Seletor de quadro…</button><button class="btn-flat" data-a="lipSync" style="grid-column:span 2">Lip sync automático…</button>' : ''}
       </div>
       ${mc ? '' : '<p class="hint">Rotação 3D vale para movie clips e botões.</p>'}`,
     );
+    if (insts.length === 1) switchSection(ui, insts[0]);
     const filters = el.filters || [];
     const fHtml = filters
       .map((f, i) => {

@@ -11,6 +11,7 @@ import { layerFrame, symbolById, instanceFrame, multiply, translation, invert, I
 import './rig.js';
 import './editor-points.js';
 import './editor-channels.js';
+import './editor-switch.js';
 import { measureText, textLines, lineHeight } from '../player/assets.js';
 import { clearBitmapCache } from '../player/effects.js';
 
@@ -333,6 +334,9 @@ P.applyLipSync = function (it, segments) {
     if (!s) continue;
     span.elements = span.elements.map((e, i) => (i === it.index ? { ...base, id: uid('e'), loop: 'single', behavior: 'graphic', firstFrame: s.frame } : e));
     delete span.tween;
+    // o fonema fica no keyframe (aparece na timeline e dá para trocar depois, no ajuste fino)
+    if (s.viseme) span.viseme = s.viseme;
+    else delete span.viseme;
   }
   this.run(new C.SetLayerFrames(layer.id, layer.frames, fr, 'Lip-sync', this.frame, this.frame));
 };

@@ -70,7 +70,7 @@ export class Editor {
       // kind: 'line' = linha central editável com largura por ponto; 'fill' = forma preenchida (contorno)
       brush: { size: 14, pressure: true, smoothing: 40, kind: 'line', fidelity: 70, taperStart: 0, taperEnd: 0, autoClose: true, behind: false },
       eraser: { size: 24, mode: 'normal', allLayers: false },
-      bucket: { gap: 'small' },
+      bucket: { gap: 'small', source: 'all' }, // source: linhas de todas as camadas ou só da ativa
       lasso: { mode: 'free' },
       polystar: { style: 'polygon', sides: 5, inner: 50 },
       pencil: { mode: 'smooth', smoothing: 25, pressure: true, fidelity: 70, taperStart: 0, taperEnd: 0, autoClose: true, autoFill: false },
@@ -318,13 +318,28 @@ export class Editor {
       this.updateSelection('Cor e traço', (el) => {
         if (el.type !== 'shape') return;
         if ('fill' in patch || 'fillOn' in patch) el.fill = s.fillOn ? applyFill(el, s.fill) : null;
-        if ('stroke' in patch || 'strokeOn' in patch) el.stroke = s.strokeOn ? s.stroke : null;
+        if ('stroke' in patch || 'strokeOn' in patch) {
+          el.stroke = s.strokeOn ? s.stroke : null;
+          delete el.strokeGradient;
+        }
         if ('strokeWidth' in patch) {
           el.strokeWidth = s.strokeWidth;
           if (!el.stroke && s.strokeOn) el.stroke = s.stroke;
         }
       });
     }
+  }
+
+  /** Gradiente na linha das formas selecionadas (a cor sólida do traço fica como reserva). */
+  setStrokeGradient(grad) {
+    const shapes = this.selectedItems().filter((it) => it.el.type === 'shape' && it.el.stroke && it.el.strokeWidth > 0);
+    if (!shapes.length) return this.toast('Selecione uma linha (forma com traço) para pintar com gradiente.');
+    this.updateSelection('Gradiente da linha', (el) => {
+      if (el.type !== 'shape' || !el.stroke || !(el.strokeWidth > 0)) return;
+      const old = el.strokeGradient;
+      el.strokeGradient = isGradient(old) && old.type === grad.type ? { ...structuredClone(grad), matrix: old.matrix, focal: old.focal } : fitGradient(grad, pathBounds(el.path));
+      el.stroke = (grad.stops[0]?.color || el.stroke).slice(0, 7);
+    });
   }
 
   setToolOptions(tool, patch) {
@@ -593,8 +608,19 @@ export class Editor {
    * Só na camada ativa, a não ser com allLayers. Parte presa a osso: apaga no desenho original
    * (levado pela pose); forma que dobra com vários ossos fica de fora (skippedRig).
    */
-  eraseRegion(region, mode = 'normal', { allLayers = false } = {}) {
+  eraseRegion(region, mode = 'normal', { allLayers = false, grow = null } = {}) {
     let skippedRig = 0;
+    // borracha "engordada" com a meia largura de cada linha (em px do palco), guardada por tamanho
+    const grown = new Map();
+    const strokeRegion = (el, wm) => {
+      if (!grow || mode === 'fills' || !el.stroke || !(el.strokeWidth > 0)) return null;
+      const k = Math.sqrt(Math.abs(wm[0] * wm[3] - wm[1] * wm[2])) || 1;
+      const maxW = el.widthProfile?.length ? Math.max(...el.widthProfile.map((p) => p.w)) : 1;
+      const pad = Math.round(((el.strokeWidth * maxW * k) / 2) * 4) / 4;
+      if (pad < 0.25) return null;
+      if (!grown.has(pad)) grown.set(pad, grow(pad));
+      return grown.get(pad);
+    };
     const compute = () => {
       const res = [];
       skippedRig = 0;
@@ -605,15 +631,15 @@ export class Editor {
         if (it.src) {
           // dobrada por vários ossos: o caminho mostrado não é o guardado, não dá para levar de volta
           if (it.el.path !== it.src.path) {
-            if (V.eraseShape({ ...it.el, matrix: it.wm }, region, mode)) skippedRig++;
+            if (V.eraseShape({ ...it.el, matrix: it.wm }, region, mode, strokeRegion(it.el, it.wm))) skippedRig++;
             continue;
           }
           const back = invert(it.poseB) || IDENTITY;
-          const out = V.eraseShape({ ...it.src, matrix: it.wm }, region, mode);
+          const out = V.eraseShape({ ...it.src, matrix: it.wm }, region, mode, strokeRegion(it.src, it.wm));
           if (out) res.push({ it, out: out.map((el) => ({ ...el, matrix: multiply(back, multiply(inv, el.matrix)) })) });
           continue;
         }
-        const out = V.eraseShape({ ...it.el, matrix: it.wm }, region, mode);
+        const out = V.eraseShape({ ...it.el, matrix: it.wm }, region, mode, strokeRegion(it.el, it.wm));
         if (out) res.push({ it, out: out.map((el) => ({ ...el, matrix: multiply(inv, el.matrix) })) });
       }
       return res;

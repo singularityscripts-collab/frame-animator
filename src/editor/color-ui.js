@@ -55,8 +55,9 @@ export class ColorUI {
     if (shape) {
       return {
         fill: shape.fill || null,
-        stroke: shape.stroke || null,
+        stroke: shape.strokeGradient || shape.stroke || null,
         fromSelection: true,
+        lineSelected: !!shape.stroke && shape.strokeWidth > 0,
       };
     }
     return { fill: ed.style.fillOn ? ed.style.fill : null, stroke: ed.style.strokeOn ? ed.style.stroke : null, fromSelection: false };
@@ -65,6 +66,7 @@ export class ColorUI {
   apply(value) {
     const ed = this.editor;
     if (this.target === 'fill') ed.setStyle(value ? { fill: value, fillOn: true } : { fillOn: false });
+    else if (isGradient(value)) ed.setStrokeGradient(value);
     else ed.setStyle(value ? { stroke: value, strokeOn: true } : { strokeOn: false });
   }
 
@@ -124,7 +126,7 @@ export class ColorUI {
         <label class="field wide" style="margin-bottom:10px"><span style="flex:1">Tipo</span>
           <select data-k="kind" style="flex:0 0 130px">
             <option value="none">Nenhum</option><option value="solid">Sólido</option>
-            ${isFill ? '<option value="linear">Gradiente linear</option><option value="radial">Gradiente radial</option>' : ''}
+            ${isFill || cur.lineSelected ? '<option value="linear">Gradiente linear</option><option value="radial">Gradiente radial</option>' : ''}
           </select></label>
         ${body}
       </section>
@@ -259,7 +261,7 @@ export class ColorUI {
     this.root.querySelectorAll('[data-sw]').forEach((b) => {
       const f = ed.swatches[Number(b.dataset.sw)];
       b.addEventListener('click', () => {
-        if (this.target === 'stroke' && isGradient(f)) return ed.toast('O traço só aceita cor sólida.');
+        if (this.target === 'stroke' && isGradient(f) && !this.current().lineSelected) return ed.toast('Gradiente no traço vale para linhas: selecione uma linha primeiro.');
         this.apply(structuredClone(f));
       });
       b.addEventListener('contextmenu', (e) => {

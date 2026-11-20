@@ -9,7 +9,7 @@
 // M (de novo) alterna o modo. As alças têm tamanho fixo na tela, qualquer que seja o zoom.
 
 import { applyPoint, invert, multiply, IDENTITY } from '../player/render.js';
-import { solveIK, rotateBone, moveRoot, posedAnchors, skinBonesOf, skinIds, skinWeightsAt, solveBones } from '../player/bones.js';
+import { solveIK, rotateBone, moveRoot, posedAnchors, skinBonesOf, skinIds, skinWeightsAt, solveBones, smartPose } from '../player/bones.js';
 import { distToSegment } from '../player/geom.js';
 import { clone } from '../model/document.js';
 import * as C from './commands.js';
@@ -373,7 +373,7 @@ function shapeAnchors(stage, editor) {
 function drawWeights(ctx, stage, editor, boneId, color) {
   const info = editor.poseAt();
   if (!info) return;
-  const solved = solveBones(info.arm, info.pose);
+  const solved = solveBones(info.arm, smartPose(info.arm, info.pose));
   ctx.save();
   for (const a of shapeAnchors(stage, editor)) {
     const el = a.el;
@@ -425,6 +425,16 @@ export function boneTool(stage, editor) {
     select(boneId);
   }
 
+  // pincel de pontos (Editar rig): prende ao osso selecionado os pontos por onde o pincel passa
+  let brushAt = null;
+  const brushR = (big) => (big ? 36 : 16);
+  function paintAt(e) {
+    brushAt = { x: e.sx, y: e.sy, big: st.big };
+    const R = brushR(st.big);
+    for (const a of shapeAnchors(stage, editor)) if (Math.hypot(a.s.x - e.sx, a.s.y - e.sy) <= R) st.keys.add(`${a.el.id}:${a.pk}`);
+    stage.invalidate();
+  }
+
   function beginPoseDrag() {
     const n0 = editor.history.undoStack.length;
     const span = editor.poseSpan();
@@ -447,6 +457,16 @@ export function boneTool(stage, editor) {
       const hit = r && hitRig(r, e.sx, e.sy);
       const rs = editor.rigState();
 
+      if (mode === 'edit' && rs.paintPoints) {
+        if (!rs.selected) return editor.toast('Selecione o osso que vai receber os pontos (clique nele).');
+        if (hit && !e.alt) {
+          select(hit.it.id);
+          return;
+        }
+        st = { mode: 'paint', keys: new Set(), unbind: e.alt, big: e.shift };
+        paintAt(e);
+        return;
+      }
       if (mode === 'edit') {
         const layer = editor.activeLayer;
         if (!layer || layer.type === 'folder' || layer.type === 'camera') return editor.toast('Escolha uma camada de desenho para pôr ossos.');
@@ -559,6 +579,10 @@ export function boneTool(stage, editor) {
 
     move(e) {
       if (!st) return;
+      if (st.mode === 'paint') {
+        paintAt(e);
+        return;
+      }
       const r = rigScreen(stage, editor);
       if (st.mode === 'create') {
         const t = applyPoint(inv(st.lm), e.wx, e.wy);
@@ -629,6 +653,38 @@ export function boneTool(stage, editor) {
       if (!st) return;
       const s = st;
       st = null;
+      if (s.mode === 'paint') {
+        brushAt = null;
+        if (s.keys.size) {
+          const n = editor.bindPoints([...s.keys], s.unbind ? null : editor.rigState().selected);
+          if (n) editor.toast(s.unbind ? `${n} ponto${n === 1 ? '' : 's'} solto${n === 1 ? '' : 's'} (voltam a seguir a pele).` : `${n} ponto${n === 1 ? '' : 's'} preso${n === 1 ? '' : 's'} ao osso.`);
+        }
+        return stage.invalidate();
+      }
+      // correção em edição + girar OUTRO osso: o giro entra na correção, não vira pose
+      const rsUp = editor.rigState();
+      const corr = rsUp.smartEdit && (s.mode === 'ik' || s.mode === 'fk') && s.moved ? editor.smartCorrections().find((x) => x.id === rsUp.smartEdit) : null;
+      if (corr && s.span && s.boneId !== corr.bone) {
+        const after = s.span.armature.pose || {}, before = s.before.pose || {};
+        s.span.armature = s.before;
+        const w = editor.smartWeightNow(corr.id);
+        if (w < 0.05) {
+          if (s.created) editor.undo();
+          return editor.toast('Neste quadro o osso da correção não está no ângulo dela: gire ele primeiro.');
+        }
+        const deltas = {};
+        for (const id of new Set([...Object.keys(after), ...Object.keys(before)])) {
+          if (id === corr.bone || id === '__root') continue;
+          const d = (after[id] || 0) - (before[id] || 0);
+          if (Math.abs(d) > 1e-4) deltas[id] = d / w;
+        }
+        if (Object.keys(deltas).length) {
+          editor.addSmartBoneDeltas(corr.id, deltas);
+          if (s.created) editor.history.squash(s.created + 1, 'Correção gira osso');
+        } else if (s.created) editor.undo();
+        editor.emit('rig');
+        return stage.invalidate();
+      }
       if (s.mode === 'create') {
         const tail = s.tail;
         const a = s.scr(s.head), b = tail && s.scr(tail);
@@ -726,6 +782,14 @@ export function boneTool(stage, editor) {
     hover(e) {
       const r = rigScreen(stage, editor);
       const mode = editor.rigMode();
+      // pincel de pontos: o círculo segue o ponteiro
+      if (mode === 'edit' && editor.rigState().paintPoints && editor.rigState().selected) {
+        brushAt = { x: e.sx, y: e.sy, big: e.shift };
+        stage.invalidate();
+      } else if (brushAt) {
+        brushAt = null;
+        stage.invalidate();
+      }
       const hit = r && hitRig(r, e.sx, e.sy);
       const key = hit ? `${hit.kind}:${hit.it.id}` : '';
       if (key !== (hover ? `${hover.kind}:${hover.it.id}` : '')) {
@@ -749,6 +813,21 @@ export function boneTool(stage, editor) {
       if (mode === 'edit' && rs.selected && editor.rigBones().some((b) => b.id === rs.selected)) drawWeights(ctx, stage, editor, rs.selected, boneColor(editor.rigBones(), rs.selected));
       drawSkeleton(stage, editor, ctx, { full: true, hover, st });
       drawDraft(ctx, st);
+      // pincel de pontos: o círculo e os pontos já marcados no arraste
+      if (mode === 'edit' && rs.paintPoints && brushAt) {
+        ctx.save();
+        ctx.strokeStyle = st?.unbind ? 'rgba(255, 90, 90, 0.9)' : 'rgba(255, 214, 10, 0.9)';
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.arc(brushAt.x, brushAt.y, brushR(brushAt.big), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        if (st?.mode === 'paint') {
+          ctx.fillStyle = st.unbind ? 'rgba(255, 90, 90, 0.9)' : 'rgba(255, 214, 10, 0.95)';
+          for (const a of shapeAnchors(stage, editor)) if (st.keys.has(`${a.el.id}:${a.pk}`)) ctx.fillRect(a.s.x - 3, a.s.y - 3, 6, 6);
+        }
+        ctx.restore();
+      }
       // correção Smart Bone em edição: pontos amarelos arrastáveis
       if (mode === 'pose' && rs.smartEdit && editor.smartCorrections().some((c) => c.id === rs.smartEdit)) {
         const c = editor.smartCorrections().find((x) => x.id === rs.smartEdit);

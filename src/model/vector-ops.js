@@ -117,13 +117,22 @@ export function combine(kind, els) {
  * mode: 'normal' (preenchimento e linha), 'fills' (só preenchimento), 'lines' (só linha).
  * Devolve null se nada mudou, ou a lista de formas que substituem esta (0 a 2: preenchimento e linha).
  */
-export function eraseShape(el, eraser, mode = 'normal') {
+/**
+ * strokeEraser: região usada para cortar a linha (a borracha engordada com a meia largura da linha,
+ * para cortar onde encosta na borda e não só no centro). Sem ela, vale a mesma da forma.
+ */
+export function eraseShape(el, eraser, mode = 'normal', strokeEraser = null) {
   const inv = invert(el.matrix);
   if (!inv) return null;
   const paper = getPaper();
   const local = eraser.clone({ insert: false });
   local.transform(new paper.Matrix(...inv));
-  const lb = local.bounds;
+  let strokeLocal = local;
+  if (strokeEraser && strokeEraser !== eraser) {
+    strokeLocal = strokeEraser.clone({ insert: false });
+    strokeLocal.transform(new paper.Matrix(...inv));
+  }
+  const lb = strokeLocal.bounds;
   const pad = (el.strokeWidth || 0) / 2;
   const b = pathBounds(el.path);
   if (!boundsIntersect({ x: lb.x, y: lb.y, w: lb.width, h: lb.height }, { x: b.x - pad, y: b.y - pad, w: b.w + 2 * pad, h: b.h + 2 * pad })) return null;
@@ -151,7 +160,7 @@ export function eraseShape(el, eraser, mode = 'normal') {
     if (mode === 'fills') strokePart = keepWhole;
     else {
       const line = toPaper(el.path, IDENTITY, { openClosed: true });
-      const res = joinTouching(line.subtract(local, { insert: false, trace: false }));
+      const res = joinTouching(line.subtract(strokeLocal, { insert: false, trace: false }));
       if (Math.abs(res.length - line.length) > 0.01) {
         changed = true;
         const r = fromPaper(res);

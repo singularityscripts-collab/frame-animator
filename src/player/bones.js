@@ -75,7 +75,7 @@ export function solveBones(arm, pose = arm.pose || {}) {
  * - arm.smart: correções Smart Bone (o ângulo de um osso move pontos da forma) antes da pele.
  */
 export function poseElements(elements, arm, pose) {
-  const solved = solveBones(arm, pose);
+  const solved = solveBones(arm, smartPose(arm, pose));
   const smart = arm.smart?.length ? smartOffsets(arm, pose) : null;
   return elements.map((el0) => {
     const off = smart && el0.type === 'shape' ? smart.get(el0.lineage || el0.id) : null;
@@ -123,6 +123,23 @@ export function smartWeights(arm, pose) {
     if (!done && prev) out.set(prev.id, 1); // passou da última: segura a última
   }
   return out;
+}
+
+/**
+ * Pose com os giros que as correções dão a outros ossos (c.bones = { id: giro extra em rad }).
+ * Ex.: dobrar o joelho gira o pé um pouco. Os pesos vêm da pose com keys (uma passada só).
+ */
+export function smartPose(arm, pose) {
+  if (!arm?.smart?.some((c) => c.bones && Object.keys(c.bones).length)) return pose;
+  const w = smartWeights(arm, pose);
+  let out = null;
+  for (const c of arm.smart) {
+    const k = w.get(c.id);
+    if (!k || !c.bones) continue;
+    out ||= { ...pose };
+    for (const [id, d] of Object.entries(c.bones)) out[id] = (out[id] || 0) + d * k;
+  }
+  return out || pose;
 }
 
 /** Deslocamentos somados das correções ativas: Map(lineage → Map("sub:pt" → [dx, dy])). */
@@ -300,7 +317,7 @@ function rigidAnchors(el, out) {
  * [{ si, pi, x, y (espaço local da forma posada), M (local → local) }] e a forma posada.
  */
 export function posedAnchors(el, arm, pose) {
-  const solved = solveBones(arm, pose);
+  const solved = solveBones(arm, smartPose(arm, pose));
   const smart = arm.smart?.length ? smartOffsets(arm, pose) : null;
   const off = smart && el.type === 'shape' ? smart.get(el.lineage || el.id) : null;
   const e = off ? offsetShape(el, off) : el;

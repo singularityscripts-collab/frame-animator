@@ -216,12 +216,50 @@ function lerpExtras(out, a, b, t) {
  * Elementos interpolados do trecho `span` em direção ao keyframe `next`, `offset` quadros depois do início.
  * guide: polilinha medida do guia de movimento (o elemento anda sobre ela).
  */
+/**
+ * Par de cada elemento no keyframe seguinte. Primeiro pela origem (forma copiada do mesmo desenho,
+ * mesmo símbolo, mesma imagem), quando ela é única dos dois lados; senão, pela posição na lista.
+ * Assim trazer uma forma para a frente numa chave só não troca os pares do tween.
+ */
+const pairCache = new WeakMap();
+const pairKey = (e) => (!e ? null : e.type === 'shape' ? 's:' + (e.lineage || e.id) : e.type === 'instance' ? 'i:' + e.symbolId : e.type === 'bitmap' ? 'b:' + e.assetId : null);
+export function tweenPairs(aEls, bEls) {
+  const got = pairCache.get(aEls);
+  if (got && got.b === bEls) return got.map;
+  const count = (els) => {
+    const m = new Map();
+    els.forEach((e, i) => {
+      const k = pairKey(e);
+      if (k) m.set(k, m.has(k) ? -1 : i);
+    });
+    return m;
+  };
+  const ca = count(aEls), cb = count(bEls);
+  const taken = new Set();
+  const map = aEls.map((a) => {
+    const k = pairKey(a);
+    const j = k != null && ca.get(k) >= 0 ? cb.get(k) : undefined;
+    if (j != null && j >= 0) {
+      taken.add(j);
+      return j;
+    }
+    return -1;
+  });
+  // sem par pela origem: a mesma posição, se ela não foi usada por outro
+  map.forEach((j, i) => {
+    if (j < 0) map[i] = !taken.has(i) && i < bEls.length ? i : -1;
+  });
+  pairCache.set(aEls, { b: bEls, map });
+  return map;
+}
+
 export function tweenElements(span, next, offset, guide = null) {
   const tw = span.tween;
   const t = applyEase(offset / span.duration, tw);
   if (tw.type === 'shape') return shapeTweenElements(span, next, t);
+  const pairs = tweenPairs(span.elements, next.elements);
   return span.elements.map((a, i) => {
-    const b = next.elements[i];
+    const b = next.elements[pairs[i]];
     if (!compatible(a, b)) return a;
     let matrix = lerpMatrix(a.matrix, b.matrix, t, tw);
     if (guide) matrix = followGuide(matrix, a, b, t, guide, tw.orient);
@@ -355,8 +393,9 @@ export function lerpShapeExact(a, b, t) {
 
 function shapeTweenElements(span, next, t) {
   const hints = span.tween.hints || [];
+  const pairs = tweenPairs(span.elements, next.elements);
   return span.elements.map((a, i) => {
-    const b = next.elements[i];
+    const b = next.elements[pairs[i]];
     if (!a || !b || a.type !== 'shape' || b.type !== 'shape') return a;
     // mesma estrutura de pontos (e sem dicas de forma pedindo outra correspondência): ponto a ponto
     if (!(i === 0 && hints.length) && sameDrawing(a, b) && sameStructure(a.path, b.path)) return lerpShapeExact(a, b, t);

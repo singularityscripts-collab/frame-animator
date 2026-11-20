@@ -5,6 +5,7 @@ import { icons } from './icons.js';
 import { showContextMenu, openDialog } from './ui-kit.js';
 import { INTERPOLATIONS, interpKind, layerChannels } from './editor-channels.js';
 import { soundById, decodeSound, computePeaks } from '../player/audio.js';
+import { isSwitch, switchDrawings, VISEMES } from './editor-switch.js';
 
 // largura da célula de quadro (zoom da timeline, guardado neste computador)
 let CW = 12;
@@ -763,9 +764,24 @@ export class TimelineUI {
     ed.setFrameSelection(null);
     ed.setFrame(frame);
     const key = ch.keys.find((k) => k.frame === frame && k.motion);
-    if (!key) return;
     const fc = this.framesCanvas;
     let to = frame;
+    if (!key) {
+      // chave de transformação, pontos, ossos…: é o keyframe da camada, que vai inteiro
+      if (ch.band || !ch.keys.some((k) => k.frame === frame) || !layer.frames.some((s) => s.start === frame)) return;
+      const mv = (ev) => {
+        to = Math.max(0, pick(ev).frame);
+        ed.setFrame(to);
+      };
+      const done = () => {
+        fc.removeEventListener('pointermove', mv);
+        fc.removeEventListener('pointerup', done);
+        if (to !== frame) ed.moveKeyframeTo(layer.id, frame, to);
+      };
+      fc.addEventListener('pointermove', mv);
+      fc.addEventListener('pointerup', done);
+      return;
+    }
     const move = (ev) => {
       to = pick(ev).frame;
       ed.setFrame(Math.max(key.motion.start, to));
@@ -887,8 +903,35 @@ export class TimelineUI {
         ? { label: 'Tocar só estes quadros (faixa de reprodução)', run: run('playRangeFromSelection') }
         : { label: 'Tirar faixa de reprodução', run: run('clearPlayRange'), disabled: !ed.playRange },
       '-',
+      ...this.switchMenuItems(x, y, layer, span),
+      { label: 'Salvar como clipe…', run: run('saveClip') },
+      { label: 'Clipes de animação…', hint: this.actions.keysOf('clipsDialog')[0] || '', run: run('clipsDialog') },
+      '-',
       { label: 'Rótulo e som do quadro…', run: run('showProperties') },
     ]);
+  }
+
+  /** Itens da troca de desenhos e do lip sync para a chave clicada. */
+  switchMenuItems(x, y, layer, span) {
+    const ed = this.editor;
+    const el = span?.elements.find((e) => e.type === 'instance' && isSwitch(ed.symbol(e.symbolId)));
+    if (!el && !span?.viseme) return [];
+    const out = [];
+    if (el) {
+      const ds = switchDrawings(ed.symbol(el.symbolId));
+      out.push({ label: 'Desenho ▸', run: () => showContextMenu(x, y, ds.map((d, i) => ({ label: d.name, run: () => ed.switchTo(i) }))) });
+    }
+    out.push({
+      label: `Fonema${span.viseme ? ` (${span.viseme === 'rest' ? 'repouso' : span.viseme})` : ''} ▸`,
+      run: () =>
+        showContextMenu(x, y, [
+          ...Object.entries(VISEMES).map(([k, l]) => ({ label: l, run: () => ed.setSpanViseme(layer.id, span.start, k) })),
+          '-',
+          { label: 'Sem fonema', disabled: !span.viseme, run: () => ed.setSpanViseme(layer.id, span.start, null) },
+        ]),
+    });
+    out.push('-');
+    return out;
   }
 
   /** Esticar/encolher o intervalo para uma duração em quadros. */
@@ -1237,6 +1280,19 @@ export class TimelineUI {
       ctx.fillStyle = '#f2f2f6';
       ctx.textBaseline = 'top';
       ctx.fillText((s.labelType === 'comment' ? '// ' : '') + s.label, x0 + 11, y + 2);
+      ctx.restore();
+    }
+    // troca de desenhos e lip sync: o nome do desenho (ou o fonema) ao lado da chave
+    const swLabel = !s.label && full ? ed.switchLabelOf?.(s) : null;
+    if (swLabel && sw > CW) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x0 + CW - 1, y, sw - CW, RH);
+      ctx.clip();
+      ctx.font = `${s.viseme ? 'bold ' : ''}10px "Segoe UI", system-ui, sans-serif`;
+      ctx.fillStyle = s.viseme ? '#9be29b' : '#d8d8e2';
+      ctx.textBaseline = 'top';
+      ctx.fillText(swLabel, x0 + CW + 1, y + 2);
       ctx.restore();
     }
     // fim do trecho

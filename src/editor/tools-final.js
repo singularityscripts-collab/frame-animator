@@ -64,6 +64,7 @@ export function subselectTool(stage, editor) {
     const n0 = editor.history.undoStack.length;
     const map = editor.prepareShapeEdit(shapes());
     st.created = editor.history.undoStack.length - n0;
+    st.idMap = map;
     if (!map.size) return;
     remapKeys(map);
     if (st.a) {
@@ -75,6 +76,28 @@ export function subselectTool(stage, editor) {
     st.orig = origPaths();
     st.screen = anchorScreens();
     st.Ms = skinMs();
+  }
+  /** Põe na seleção as formas vizinhas (mesma camada) com algum ponto dentro do raio do ímã. Devolve a seleção de antes. */
+  function addMagnetNeighbors(R) {
+    if (!R || !selected.size) return null;
+    const sel = shapes();
+    const layers = new Set(sel.map((it) => it.layer.id));
+    const from = anchors().filter((a) => selected.has(a.key)).map((a) => a.s);
+    if (!from.length) return null;
+    const extra = editor.frameItems().filter((it) => {
+      if (it.el.type !== 'shape' || it.motion || it.multi || it.src || editor.selection.has(it.el.id) || !layers.has(it.layer.id)) return false;
+      return subpaths(it.el.path).some((sp) =>
+        sp.pts.some((q) => {
+          const w = applyPoint(it.wm, q[0], q[1]);
+          const s = stage.toScreen(w.x, w.y);
+          return from.some((o) => Math.hypot(o.x - s.x, o.y - s.y) < R);
+        }),
+      );
+    });
+    if (!extra.length) return null;
+    const before = [...editor.selection];
+    editor.setSelection([...before, ...extra.map((it) => it.el.id)]);
+    return before;
   }
   /** Posição original na tela de cada ponto (para o ímã). */
   function anchorScreens() {
@@ -135,7 +158,9 @@ export function subselectTool(stage, editor) {
           selected.has(hitA.key) ? selected.delete(hitA.key) : selected.add(hitA.key);
           touch();
         } else if (!selected.has(hitA.key)) setSel(new Set([hitA.key]));
-        st = { mode: 'anchors', start: e, snap: editor.beginLiveEdit(shapes()), orig: origPaths(), screen: anchorScreens(), Ms: skinMs() };
+        // ímã: formas da mesma camada com pontos perto também vão junto (entram na seleção durante o arraste)
+        const restoreSel = addMagnetNeighbors(Number(editor.toolOptions.subselect?.magnet) || 0);
+        st = { mode: 'anchors', start: e, snap: editor.beginLiveEdit(shapes()), orig: origPaths(), screen: anchorScreens(), Ms: skinMs(), restoreSel };
         stage.invalidate();
         return;
       }
@@ -242,9 +267,12 @@ export function subselectTool(stage, editor) {
       editor.endLiveEdit(label, s.snap);
       // keyframe criado pelo auto-key + a edição = um passo só de desfazer
       if (s.created && editor.history.undoStack.length > n0) editor.history.squash(s.created + 1, label);
+      // as formas que o ímã puxou saem da seleção de novo
+      if (s.restoreSel) editor.setSelection(s.restoreSel.map((id) => s.idMap?.get(id) || id));
     },
     cancel() {
       if (st?.snap) editor.cancelLiveEdit(st.snap);
+      if (st?.restoreSel) editor.setSelection(st.restoreSel);
       st = null;
     },
     /** Delete: apaga os pontos selecionados (a forma some se sobrar pouco). */

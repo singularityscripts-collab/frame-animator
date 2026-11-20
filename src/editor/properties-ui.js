@@ -75,6 +75,8 @@ const TOOL_OPTIONS = {
     <p class="hint" style="margin-top:6px">Sem essa opção, a borracha só apaga na camada ativa.</p>`,
   bucket: `<label class="field wide"><span style="flex:1">Fechar lacunas</span>
       <select data-o="bucket.gap" style="flex:0 0 140px"><option value="none">Não fechar</option><option value="small">Pequenas</option><option value="medium">Médias</option><option value="large">Grandes</option></select></label>
+    <label class="field wide" style="margin-top:6px"><span style="flex:1">Linhas que fecham a área</span>
+      <select data-o="bucket.source" style="flex:0 0 140px"><option value="all">Todas as camadas</option><option value="layer">Só esta camada</option></select></label>
     <p class="hint" style="margin-top:6px">Clique dentro de uma forma para trocar a cor, ou numa área cercada por linhas para criar um preenchimento por baixo delas. Alt+clique pega a cor.</p>`,
   eyedropper: '<p class="hint">Clique num preenchimento para copiar a cor; numa linha, copia o traço; em qualquer outro ponto, a cor do pixel. Shift+clique manda a cor para o traço. No pincel e no balde, Alt+clique faz o mesmo sem trocar de ferramenta.</p>',
   camera: '<p class="hint">Arraste no palco para mover a câmera. Zoom, giro e tom de cor ficam na seção Câmera.</p>',

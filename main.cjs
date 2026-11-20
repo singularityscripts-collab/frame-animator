@@ -371,6 +371,9 @@ function buildMenu() {
         item('Importar som…', 'importSound'),
         item('Importar do Animate (.fla / XFL)…', 'importAnimate'),
         { type: 'separator' },
+        item('Personagens…', 'characterLibrary', 'CmdOrCtrl+Shift+P'),
+        item('Importar personagem…', 'importCharacter'),
+        { type: 'separator' },
         item('Testar filme', 'testScene', 'CmdOrCtrl+Enter'),
         {
           label: 'Exportar',
@@ -424,6 +427,9 @@ function buildMenu() {
         item('Editor de movimento…', 'motionEditor'),
         item('Easing personalizado…', 'customEase'),
         { type: 'separator' },
+        item('Salvar quadros como clipe…', 'saveClip'),
+        item('Clipes de animação…', 'clipsDialog', 'CmdOrCtrl+Alt+K'),
+        { type: 'separator' },
         item('Nova cena', 'newScene'),
         item('Duplicar cena', 'duplicateScene'),
         item('Renomear cena…', 'renameScene'),
@@ -453,7 +459,17 @@ function buildMenu() {
         { type: 'separator' },
         item('Escala de 9 fatias…', 'scale9'),
         item('Seletor de quadro…', 'framePicker'),
-        item('Lip-sync automático…', 'lipSync'),
+        item('Lip sync automático…', 'lipSync'),
+        {
+          label: 'Troca de desenhos',
+          submenu: [
+            item('Criar camada de troca', 'createSwitch', 'CmdOrCtrl+Alt+W'),
+            item('Próximo desenho', 'switchNext', 'Alt+]'),
+            item('Desenho anterior', 'switchPrev', 'Alt+['),
+            item('Novo desenho (cópia do atual)', 'switchAddCopy'),
+            item('Novo desenho vazio', 'switchAddEmpty'),
+          ],
+        },
         {
           label: 'Alinhar',
           submenu: [
@@ -957,6 +973,75 @@ ipcMain.handle('export:html5', async (_e, o) => {
   await fs.mkdir(dir, { recursive: true });
   for (const [name, text] of Object.entries(files)) await fs.writeFile(path.join(dir, name), text);
   return { path: path.join(dir, 'index.html') };
+});
+
+// ---------- personagens: biblioteca pessoal (vale para todos os arquivos) ----------
+const CHAR_EXT = '.fachar';
+const charDir = () => path.join(app.getPath('userData'), 'personagens');
+const charName = (n) => String(n || 'Personagem').replace(/[<>:"/\|?* -]/g, '_').replace(/.+$/, '').trim().slice(0, 80) || 'Personagem';
+/** Só nomes de arquivo da pasta de personagens (nada de caminhos). */
+function charPath(file) {
+  if (typeof file !== 'string' || path.basename(file) !== file || !file.endsWith(CHAR_EXT)) throw new Error('Personagem inválido');
+  return path.join(charDir(), file);
+}
+async function writeAtomic(p, data) {
+  const tmp = `${p}.tmp`;
+  await fs.writeFile(tmp, data, 'utf8');
+  await fs.rename(tmp, p);
+}
+const charSummary = (file, text, stat) => {
+  let info = {};
+  try {
+    const j = JSON.parse(text);
+    info = { name: j.name, thumb: typeof j.thumb === 'string' ? j.thumb : null, symbols: j.items?.length || 0, clips: (j.items || []).reduce((n, s) => n + (s.clips?.length || 0), 0) };
+  } catch {
+    info = { name: file.replace(CHAR_EXT, ''), broken: true };
+  }
+  return { file, size: stat.size, mtime: stat.mtimeMs, ...info };
+};
+ipcMain.handle('character:list', async () => {
+  await fs.mkdir(charDir(), { recursive: true });
+  const out = [];
+  for (const f of await fs.readdir(charDir())) {
+    if (!f.endsWith(CHAR_EXT)) continue;
+    const p = path.join(charDir(), f);
+    try {
+      out.push(charSummary(f, await fs.readFile(p, 'utf8'), await fs.stat(p)));
+    } catch {
+      // arquivo sumiu no meio
+    }
+  }
+  return out.sort((a, b) => b.mtime - a.mtime);
+});
+ipcMain.handle('character:save', async (_e, { name, data }) => {
+  if (typeof data !== 'string') throw new Error('Dados inválidos');
+  await fs.mkdir(charDir(), { recursive: true });
+  const file = charName(name) + CHAR_EXT;
+  await writeAtomic(path.join(charDir(), file), data);
+  return { file };
+});
+ipcMain.handle('character:load', async (_e, file) => fs.readFile(charPath(file), 'utf8'));
+ipcMain.handle('character:delete', async (_e, file) => {
+  await shell.trashItem(charPath(file)); // vai para a lixeira (dá para recuperar)
+  return true;
+});
+ipcMain.handle('character:export', async (_e, { name, data }) => {
+  if (typeof data !== 'string') throw new Error('Dados inválidos');
+  const r = await dialog.showSaveDialog(win, { title: 'Exportar personagem', defaultPath: charName(name) + CHAR_EXT, filters: [{ name: 'Personagem do Frame Animator', extensions: ['fachar'] }] });
+  if (r.canceled || !r.filePath) return null;
+  await writeAtomic(r.filePath, data);
+  return { path: r.filePath };
+});
+ipcMain.handle('character:import', async () => {
+  const r = await dialog.showOpenDialog(win, { title: 'Importar personagem', filters: [{ name: 'Personagem do Frame Animator', extensions: ['fachar'] }], properties: ['openFile'] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const stat = await fs.stat(r.filePaths[0]);
+  if (stat.size > 300 * 1024 * 1024) throw new Error('Arquivo de personagem muito grande (máximo 300 MB).');
+  return fs.readFile(r.filePaths[0], 'utf8');
+});
+ipcMain.on('character:reveal', async () => {
+  await fs.mkdir(charDir(), { recursive: true });
+  shell.openPath(charDir());
 });
 
 ipcMain.on('keys:set', (_e, map) => {

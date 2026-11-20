@@ -40,6 +40,8 @@ export function buildRig(ui) {
     if (a === 'poseSave') ed.savePose();
     if (a === 'smartNew') ed.addSmartCorrection();
     if (a === 'smartDone') ed.setRigState({ smartEdit: null });
+    if (a === 'smartClearBones' && ed.rigState().smartEdit) ed.clearSmartBones(ed.rigState().smartEdit);
+    if (a === 'paintPoints') ed.setRigState({ paintPoints: !ed.rigState().paintPoints });
   });
   body.addEventListener('change', (e) => {
     const t = e.target;
@@ -143,7 +145,9 @@ export function refreshRig(ui) {
             : ''
         }
         ${mode === 'pose' ? smartHtml(ed, sel) : ''}
-        ${mode === 'edit' ? `<p class="hint">${parts ? `${parts} ${parts === 1 ? 'parte presa' : 'partes presas'} a este osso (moldura na cor dele no palco).` : 'Nenhuma parte presa a este osso: Ctrl+clique numa parte no palco.'}</p>
+        ${mode === 'edit' ? `<button class="btn-flat full ${rs.paintPoints ? 'on' : ''}" data-ra="paintPoints" title="Passe o pincel sobre os pontos da forma para prender ao osso; Alt solta">${rs.paintPoints ? 'Pincel de pontos: ligado' : 'Pincel de pontos'}</button>
+        ${rs.paintPoints ? '<p class="hint">Arraste sobre os pontos da forma: eles passam a seguir só este osso (bolinha cheia). Alt+arraste solta. Shift: pincel maior.</p>' : ''}
+        <p class="hint">${parts ? `${parts} ${parts === 1 ? 'parte presa' : 'partes presas'} a este osso (moldura na cor dele no palco).` : 'Nenhuma parte presa a este osso: Ctrl+clique numa parte no palco.'}</p>
         <button class="btn-flat full danger-hover" data-ra="delete" title="Delete">Apagar osso</button>` : ''}
       </div>`
     : bones.length
@@ -190,7 +194,8 @@ function smartHtml(ed, sel) {
     .map((c) => {
       const w = Math.round(ed.smartWeightNow(c.id) * 100);
       const n = Object.values(c.shapes || {}).reduce((a, x) => a + Object.keys(x).length, 0);
-      return `<li class="${c.id === editing ? 'on' : ''}"><span class="bone-name">${fmt(c.angle)}° · ${n} ${n === 1 ? 'ponto' : 'pontos'} · agora ${w}%</span>
+      const nb = Object.keys(c.bones || {}).length;
+      return `<li class="${c.id === editing ? 'on' : ''}"><span class="bone-name">${fmt(c.angle)}° · ${n} ${n === 1 ? 'ponto' : 'pontos'}${nb ? ` · gira ${nb} ${nb === 1 ? 'osso' : 'ossos'}` : ''} · agora ${w}%</span>
         <button class="bone-pin ${c.id === editing ? 'on' : ''}" data-smart-edit="${c.id}">${c.id === editing ? 'editando' : 'editar'}</button>
         <button class="bone-pin" data-smart-del="${c.id}" title="Apagar correção">×</button></li>`;
     })
@@ -198,7 +203,9 @@ function smartHtml(ed, sel) {
   const cur = list.find((c) => c.id === editing);
   return `<h4 class="rig-h">Smart Bone (correções)</h4>
     ${rows ? `<ul class="bone-tree">${rows}</ul>` : '<p class="hint">Dobre o osso (ex.: cotovelo a 90°) e crie uma correção: ao chegar nesse ângulo, a forma ajusta sozinha (o cotovelo não amassa).</p>'}
-    ${cur ? '<p class="hint"><b>Editando:</b> arraste os pontos amarelos da forma no palco. O ajuste aparece aos poucos conforme o osso gira.</p><button class="btn-flat full" data-ra="smartDone">Concluir correção</button>' : '<button class="btn-flat full" data-ra="smartNew">Nova correção neste ângulo</button>'}`;
+    ${cur ? `<p class="hint"><b>Editando:</b> arraste os pontos amarelos da forma no palco. Girar <b>outro</b> osso agora também entra na correção (ex.: o pé acompanha o joelho). O ajuste aparece aos poucos conforme o osso gira.</p>
+      ${cur.bones ? '<button class="btn-flat full" data-ra="smartClearBones">Tirar os giros de outros ossos</button>' : ''}
+      <button class="btn-flat full" data-ra="smartDone">Concluir correção</button>` : '<button class="btn-flat full" data-ra="smartNew">Nova correção neste ângulo</button>'}`;
 }
 
 /** Biblioteca de poses da camada (modo Posar). */

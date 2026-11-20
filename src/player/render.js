@@ -498,10 +498,13 @@ function drawShapeBody(ctx, el, p, doc, env) {
         pl.forEach((q, i) => (i ? poly.lineTo(q.x, q.y) : poly.moveTo(q.x, q.y)));
         poly.closePath();
       }
-      ctx.fillStyle = el.stroke;
-      ctx.fill(poly, 'nonzero');
+      if (isGradient(el.strokeGradient)) fillPath(ctx, el.strokeGradient, poly, 'nonzero', doc);
+      else {
+        ctx.fillStyle = el.stroke;
+        ctx.fill(poly, 'nonzero');
+      }
     } else {
-      ctx.strokeStyle = el.stroke;
+      ctx.strokeStyle = isGradient(el.strokeGradient) ? makeCanvasGradient(ctx, el.strokeGradient) : el.stroke;
       ctx.lineWidth = el.strokeWidth;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';

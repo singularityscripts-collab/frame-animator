@@ -25,7 +25,7 @@ Objetivo: deixar as funções que já existem fáceis, previsíveis e gostosas d
 | 5 | Desempenho e estabilidade | movida para a Parte 2 (V8) |
 | 6 | Polimento visual | movida para a Parte 2 (V9) |
 
-**Parte 2 em andamento:** o app inteiro no nível do Moho. As etapas V1–V9 e o status estão mais abaixo, em "Parte 2".
+**Parte 2 em andamento:** o app inteiro no nível do Moho. As etapas V1–V10 e o status estão mais abaixo, em "Parte 2".
 
 **Falta do usuário:** a seção "O que mais me incomoda hoje" do pedido veio com os campos em branco ("[descreva o que acontece]"). Os problemas que você descrever entram no topo da etapa certa.
 
@@ -442,11 +442,14 @@ Valem as mesmas regras da Parte 1, com uma diferença: **aqui podem entrar funç
 | V2 | Traço vetorial de verdade | **pronta** |
 | V3 | Animação ponto a ponto | **pronta** |
 | V4 | Ossos no nível do Moho | **pronta** |
-| V5 | Canais, curvas e interpolação | **pronta** (esperando "próxima etapa") |
-| V6 | Troca de desenhos, boca e reaproveitamento | pendente |
-| V7 | Câmera, cena e exportação | pendente |
-| V8 | Desempenho e estabilidade (era a Etapa 5) | pendente |
-| V9 | Polimento visual (era a Etapa 6) | pendente |
+| V5 | Canais, curvas e interpolação | **pronta** |
+| V6 | Troca de desenhos, boca e reaproveitamento | **pronta** |
+| V7 | Pendências vetoriais (o que ficou de fora em V1–V5) | **pronta** (esperando "próxima etapa") |
+| V8 | Câmera, cena e exportação | pendente |
+| V9 | Desempenho e estabilidade (era a Etapa 5) | pendente |
+| V10 | Polimento visual (era a Etapa 6) | pendente |
+
+A V7 entrou a pedido em 19/11/2026 ("refine as vetoriais com os recursos que você não conseguiu colocar"), feita junto com a V6. As etapas seguintes andaram um número.
 
 ## Etapa V1: Mesa digitalizadora (pronta)
 
@@ -544,9 +547,9 @@ A caneta simulada da Etapa 2 não pegou o problema, porque eventos sintéticos n
 
 ### Pendências da etapa
 
-- **Borracha e espessura:** a borracha corta a linha onde encosta no **centro** dela. Para apagar só a borda de uma linha muito grossa, use "Forma preenchida".
-- **Gradiente na linha editável:** o pincel usa a cor sólida do preenchimento. Para pintar com gradiente, use "Forma preenchida".
-- **Balde em várias camadas** (fechar vãos olhando as linhas de outras camadas) ficou para a V8, junto com o desempenho, porque precisa renderizar as camadas juntas.
+- ~~**Borracha e espessura**~~: resolvido na V7 (a borracha corta onde encosta na borda da linha).
+- ~~**Gradiente na linha editável**~~: resolvido na V7.
+- ~~**Balde em várias camadas**~~: resolvido na V7 (opção "Linhas que fecham a área").
 - **Travar preenchimento** (gradiente contínuo entre formas) não entrou. É raro em animação e pode voltar na V9 se fizer falta.
 - **Mesa física:** a curva de pressão foi testada só com caneta simulada.
 
@@ -608,9 +611,9 @@ A caneta simulada da Etapa 2 não pegou o problema, porque eventos sintéticos n
 
 ### Pendências da etapa
 
-- **Copiar e colar elementos** (Ctrl+C / Ctrl+V de formas) não marca a origem. Só F6, auto-key e colar **quadros** marcam. Para animar pontos, copie o keyframe.
-- **Ordem dos elementos:** o tween liga a forma N de uma chave com a forma N da outra. Mudar a ordem numa chave só (trazer para a frente) troca os pares. O mesmo vale para o tween clássico.
-- **Ímã:** age só nas formas selecionadas, não nas outras formas da camada.
+- ~~**Copiar e colar elementos**~~: conferido na V7, colar também marca a origem (teste novo).
+- ~~**Ordem dos elementos**~~: resolvido na V7 (os pares do tween seguem a origem).
+- ~~**Ímã**~~: resolvido na V7 (puxa também as formas vizinhas da camada).
 
 ## Etapa V4: Ossos no nível do Moho (pronta)
 
@@ -664,8 +667,8 @@ A caneta simulada da Etapa 2 não pegou o problema, porque eventos sintéticos n
 
 ### Pendências da etapa
 
-- **Correção que gira outros ossos:** no Moho, o Smart Bone também pode girar outros ossos. Aqui ele move só os pontos das formas.
-- **Pintura de peso com pincel:** não entrou. O peso vem da Força do osso e de prender pontos.
+- ~~**Correção que gira outros ossos**~~: resolvido na V7.
+- **Pintura de peso com pincel:** a V7 trouxe o pincel de pontos (prende/solta pontos a um osso pintando). Peso fracionado por ponto (50% de um osso, 50% de outro) continua vindo da Força do osso.
 - **Ossos de controle:** não entraram, nem o alvo de IK separado, nem o "flip" de mão. Pinos e limites continuam sendo o jeito de controlar.
 - **Dinâmica no esqueleto do editor:** o esqueleto mostra a pose com keys, e a arte mostra o balanço. Assim o IK continua editando as chaves.
 
@@ -733,18 +736,111 @@ A caneta simulada da Etapa 2 não pegou o problema, porque eventos sintéticos n
 
 ### Pendências da etapa
 
-- **Arrastar chaves num canal:** só as keys de **motion tween** mudam de quadro direto no canal. As outras (posição, pontos, ossos) são keyframes da camada inteira: arraste na linha da camada.
+- **Arrastar chaves num canal:** desde a V7, toda chave do canal arrasta. As de motion tween mudam só aquela propriedade; as outras movem o keyframe da camada inteira (todas as propriedades dele).
 - **Ruído nas propriedades:** o ruído vale para a camada inteira, não para uma propriedade de um elemento só.
-- **Ciclo:** repete o que a camada mostra. Para ver o ciclo, a camada (ou a cena) precisa ter quadros depois do fim do trecho (F5).
+- ~~**Ciclo**~~: resolvido na V7 (o ciclo estende a camada sozinho).
 
-## Etapa V6: Troca de desenhos, boca e reaproveitamento
+## Etapa V6: Troca de desenhos, boca e reaproveitamento (pronta)
 
-- **Camada de troca (Switch):** guarda desenhos alternativos (bocas, mãos, olhos) e a timeline escolhe qual aparece. Funciona com ossos e com troca rápida no palco.
-- **Lip sync:** o `lipsync.js` já existe. A etapa liga o lip sync à camada de troca, com o som visível na timeline e ajuste fino por fonema.
-- **Biblioteca de personagens:** rig + desenhos + ações num pacote reaproveitável entre arquivos.
-- **Ações nomeadas:** ciclo de andar, piscar e respirar como clipes reaproveitáveis, inseridos na timeline e misturados.
+### O que foi feito
 
-## Etapa V7: Câmera, cena e exportação
+- **Camada de troca** (Modificar › Troca de desenhos › Criar camada de troca, Ctrl+Alt+W):
+  - cada objeto selecionado vira um desenho (bocas, mãos, olhos);
+  - a camada nova fica acima, com uma instância que mostra um desenho por vez;
+  - por dentro é um símbolo gráfico com `switch: true`: cada keyframe da primeira camada dele é um desenho, e o nome fica no rótulo do keyframe;
+  - funciona com ossos como qualquer símbolo (prender a instância a um osso).
+- **Trocar desenho:**
+  - painel Propriedades › Troca de desenhos, logo abaixo do nome da instância: miniaturas, clique troca a partir do quadro atual (cria a chave), duplo clique entra para editar o desenho;
+  - Alt+[ e Alt+] trocam pelo teclado; clique direito na instância (palco) e na chave (timeline) também trocam;
+  - + Cópia, + Vazio, Renomear e Apagar desenho (apagar reaponta todas as instâncias do símbolo);
+  - a timeline escreve o nome do desenho (ou o fonema) ao lado de cada chave, e os canais ganham a linha "Desenho (troca)".
+- **Lip sync ligado à troca:**
+  - desenhos com nome de fonema (A, E, O, U, MBP, FV, L, S, repouso…) já vêm escolhidos no diálogo; fonema sem desenho usa a boca mais parecida;
+  - o mapa fonema → desenho fica salvo no símbolo (`visemeMap`), não só no navegador;
+  - cada chave gerada guarda o fonema (`span.viseme`), mostrado na timeline em verde;
+  - ajuste fino: clique direito na chave › Fonema ▸ troca o fonema e o desenho;
+  - "Pôr a fala numa camada": cria a camada com o som em stream, com a onda visível e ouvindo ao arrastar a agulha;
+  - o lip sync inteiro é um passo de desfazer.
+- **Clipes de animação** (ações nomeadas, como no Moho):
+  - Inserir › Salvar quadros como clipe (ou clique direito no quadro): guarda os quadros selecionados das camadas;
+  - Inserir › Clipes de animação (Ctrl+Alt+K): lista, renomear, apagar e inserir no quadro atual;
+  - inserir com repetições e em dois modos: **Substituir** ou **Misturar** (só os ossos que o clipe mexe mudam, com peso; as chaves da camada continuam, então dá para pôr um aceno por cima de um andar);
+  - os clipes ficam na timeline onde foram feitos (`timeline.clips`): na cena ou dentro do símbolo do personagem.
+- **Biblioteca de personagens** (Arquivo › Personagens, Ctrl+Shift+P):
+  - salva o símbolo do personagem com tudo que ele usa (símbolos de dentro, trocas, imagens, sons e clipes) num `.fachar`;
+  - a biblioteca fica na pasta do usuário (vale para todos os arquivos); "Usar" traz uma cópia com ids novos para uma pasta da biblioteca e coloca no palco;
+  - também exporta/importa arquivo `.fachar` (clique direito no símbolo na biblioteca: Salvar como personagem / Exportar personagem);
+  - apagar da biblioteca de personagens manda o arquivo para a lixeira.
+- Arquivos novos: `src/editor/editor-switch.js` (lógica), `src/editor/actions-switch.js` (ações e diálogos), `test/switch.test.js` (8 testes). Main/preload: canais `character:*`.
+
+### Como testar
+
+1. Desenhe três bocas, selecione as três e use Ctrl+Alt+W.
+2. Renomeie os desenhos para "repouso", "A" e "O" (painel › Renomear).
+3. Vá ao quadro 8 e clique em outra boca: a chave aparece com o nome.
+4. Importe uma fala e use "Lip sync automático…": confira os fonemas na timeline e troque um com clique direito › Fonema.
+5. Selecione quadros, salve como clipe e insira em outro ponto (Ctrl+Alt+K).
+6. Selecione o personagem no palco, Arquivo › Personagens › Salvar o selecionado; num arquivo novo, "Usar".
+
+### Testado
+
+- 151 testes passando, `npm run check` e `npm run smoke` ok.
+- No app (navegador de teste): troca criada e trocada pelo painel; lip sync com uma fala sintética gerou repouso/A/O nas sílabas certas, com a camada da fala; fonema trocado por clique direito; clipe salvo, inserido e renomeado; personagem salvo e trazido de volta (pasta nova e nome "Boca 2"). Sem erros no console.
+
+### Pendências da etapa
+
+- **Clipe de cena x de personagem:** um clipe salvo na cena não vai junto quando o personagem é exportado. Para levar, salve o clipe com o símbolo do personagem aberto.
+- **Misturar** age nos ossos. Em camadas sem ossos, o peso só mistura a posição dos elementos quando os dois lados têm os mesmos elementos.
+- **Biblioteca de personagens no app instalado:** testada no navegador (que guarda no próprio navegador). No app ela usa a pasta `personagens` dos dados do usuário; confira no Electron.
+- **Lip sync** continua acústico (não reconhece palavras): o ajuste fino por fonema é o caminho para acertar.
+
+## Etapa V7: Pendências vetoriais (pronta)
+
+Pedido de 19/11/2026: refinar a parte vetorial com o que tinha ficado de fora nas etapas V1–V5.
+
+### O que foi feito
+
+- **Borracha que respeita a espessura (V2):** cada linha é cortada onde a borracha encosta na **borda** dela (a borracha engorda pela meia largura de cada linha, com a largura máxima do perfil). Preenchimentos continuam como antes.
+- **Gradiente na linha editável (V2):**
+  - o pincel de linha com preenchimento em gradiente cria a linha já com o gradiente;
+  - Cores › Traço com uma linha selecionada aceita gradiente linear e radial (e as amostras de gradiente);
+  - guardado em `el.strokeGradient` (a cor sólida do traço fica de reserva); escolher cor sólida tira o gradiente.
+- **Balde em várias camadas (V2, era da V8):** opção "Linhas que fecham a área": **Todas as camadas** (padrão: a camada ativa + só as linhas das outras, o fundo pintado não atrapalha) ou **Só esta camada**. Clicar numa forma de outra camada preenche a área fechada na camada ativa; sem área fechada, repinta a forma, como antes.
+- **Pares do tween pela origem (V3):** o tween liga cada forma à cópia dela na chave seguinte (lineage), e símbolos/imagens pelo símbolo, quando são únicos. Trazer uma forma para a frente numa chave só não troca mais os pares (clássico e shape tween).
+- **Colar marca a origem (V3):** conferido: Ctrl+C/Ctrl+V de formas já liga o desenho (teste novo).
+- **Ímã nas formas vizinhas (V3):** com ímã, os pontos de outras formas da mesma camada dentro do raio também vão junto; a seleção volta ao normal no fim.
+- **Smart Bone que gira outros ossos (V4):**
+  - com a correção em edição, girar **outro** osso grava o giro na correção (`c.bones`), dividido pelo peso do momento;
+  - no ângulo da correção, o osso gira a mais; no meio do caminho, metade (o pé acompanha o joelho, por exemplo);
+  - o painel mostra "gira N ossos" e tem "Tirar os giros de outros ossos";
+  - vale no palco, ao tocar, na exportação e na edição de pontos.
+- **Pincel de pontos (V4):** Editar rig › osso selecionado › "Pincel de pontos": pintar sobre os pontos prende ao osso; Alt solta; Shift aumenta o pincel.
+- **Canais (V5):** toda chave do canal arrasta; as que não são de motion tween levam o keyframe da camada inteira.
+- **Ciclo (V5):** "Ciclo ▸" estende a camada até o fim da cena (ou três voltas) quando ela acaba no trecho, num passo de desfazer.
+- Teste novo: `test/vector2.test.js` (8).
+
+### Como testar
+
+1. Desenhe uma linha grossa (pincel, 30 px) e passe a borracha só na borda dela: ela corta.
+2. Selecione a linha, Cores › Traço › Gradiente linear.
+3. Pinte um fundo numa camada, desenhe um contorno em outra e use o balde numa terceira, dentro do contorno.
+4. Faça duas chaves de duas formas, troque a ordem numa delas (Ctrl+Shift+↑) e toque: cada forma segue a dela.
+5. Ossos: Posar, dobre o cotovelo, "Nova correção neste ângulo", gire o antebraço e conclua. Volte o cotovelo: o antebraço volta junto.
+6. Editar rig, selecione um osso, "Pincel de pontos" e pinte a ponta da forma.
+
+### Testado
+
+- 151 testes passando, `npm run check` e `npm run smoke` ok.
+- No app: borracha encostando só na borda de uma linha de 30 px cortou; gradiente linear e amostra de gradiente no traço; balde preencheu dentro do contorno de outra camada com o fundo pintado intacto; pincel de pontos prendeu os 2 pontos da ponta ao antebraço; correção do ombro a 34° gravou o giro do antebraço sem mexer na pose com keys. Sem erros no console.
+
+### Pendências da etapa
+
+- **Gradiente na linha:** o SVG e o Lottie exportam a linha com a cor sólida de reserva. A ferramenta Transformar gradiente (F) move o gradiente do preenchimento, não o da linha.
+- **Balde em "Todas as camadas":** símbolos e textos de outras camadas não fecham áreas (só as linhas de formas).
+- **Peso fracionado por pincel** (meio a meio entre dois ossos) não entrou; o pincel prende o ponto inteiro a um osso.
+- **Travar preenchimento** (gradiente contínuo entre várias formas) segue de fora; pode entrar na V10 se fizer falta.
+
+## Etapa V8: Câmera, cena e exportação
 
 - **Câmera:** câmera com profundidade (paralaxe por camada), tremida, zoom e enquadramento seguro, além de guia de enquadramento na tela.
 - **Camadas:**
@@ -759,16 +855,16 @@ A caneta simulada da Etapa 2 não pegou o problema, porque eventos sintéticos n
   - HTML5 do player;
   - fila de exportação com prévia.
 
-## Etapa V8: Desempenho e estabilidade
+## Etapa V9: Desempenho e estabilidade
 
 É a antiga Etapa 5 (achados P1–P4), agora medida também com as funções novas:
 - 60 fps com 20 camadas × 300 quadros e um rig com smart bones e dinâmica;
 - desfazer agrupado;
 - autosave e recuperação depois de travamento;
 - nenhuma ação destrutiva sem desfazer ou sem confirmação;
-- balde que fecha vãos olhando as linhas de várias camadas (veio da V2).
+- o balde em várias camadas já entrou na V7; aqui fica medir o tempo dele em cenas grandes.
 
-## Etapa V9: Polimento visual
+## Etapa V10: Polimento visual
 
 É a antiga Etapa 6:
 - espaçamento, ícones e cores consistentes;
@@ -809,3 +905,7 @@ A caneta simulada da Etapa 2 não pegou o problema, porque eventos sintéticos n
   - 135 testes passando, `npm run check` e `npm run smoke` ok.
 - **Versão 0.3.0** (19/11/2026): etapas V1 a V5 publicadas no GitHub como release, com instalador e atualização automática.
 - **Versão 0.3.1** (19/11/2026): corrigida a atualização pelo app, que falhava com "arquivo em uso". O instalador herdava do app a pasta atual (dentro da pasta de instalação) e o Windows não deixava trocar a pasta. Agora ele sai dela ao abrir, espera os processos auxiliares do app fecharem e apaga a cópia nova se algo falhar.
+- **Etapa V6:** camada de troca (desenhos com nome, troca pelo painel, teclado e menus), lip sync ligado à troca com fonema por chave e ajuste fino, camada da fala, clipes de animação (substituir ou misturar, com repetição) e biblioteca de personagens (.fachar).
+- **Etapa V7** (pedida junto): borracha que respeita a espessura, gradiente na linha, balde em várias camadas, pares do tween pela origem, ímã nas formas vizinhas, Smart Bone que gira outros ossos, pincel de pontos, arrastar qualquer chave de canal e ciclo que estende a camada.
+  - 151 testes passando, `npm run check` e `npm run smoke` ok. As etapas seguintes viraram V8 (câmera), V9 (desempenho) e V10 (polimento).
+- **Versão 0.4.0** (19/11/2026): etapas V6 e V7 publicadas no GitHub como release.

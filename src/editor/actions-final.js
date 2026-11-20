@@ -13,6 +13,8 @@ import { buildSpriteSheet } from '../export/spritesheet.js';
 import { importXFL } from '../model/xfl.js';
 import { traceImage, traceImageAsync } from '../model/trace.js';
 import { analyzeLipSync, VISEMES } from '../model/lipsync.js';
+import { isSwitch, switchDrawings, visemeMapFor } from './editor-switch.js';
+import { extendSwitchActions } from './actions-switch.js';
 import { timelineBounds } from '../model/geometry.js';
 import { runExport } from './export-ui.js';
 import { ALL_TOOLS } from './toolbar-ui.js';
@@ -97,7 +99,7 @@ export const ACTION_LABELS = {
   exportSVG: 'Exportar SVG', publishSettings: 'Configurações de publicação', publish: 'Publicar', findReplace: 'Localizar e substituir', keyboardShortcuts: 'Atalhos de teclado',
   editorScripts: 'Scripts do editor', insertButtonComponent: 'Inserir botão', insertListComponent: 'Inserir lista', insertVideoComponent: 'Inserir vídeo', breakApart: 'Separar',
   optimizeCurves: 'Otimizar curvas', traceBitmap: 'Vetorizar bitmap', toggleObjectDrawing: 'Desenho de objeto / mesclado', scale9: 'Escala de 9 fatias', framePicker: 'Seletor de quadro',
-  lipSync: 'Lip-sync automático', alignLeft: 'Alinhar à esquerda', alignHCenter: 'Centro horizontal', alignRight: 'Alinhar à direita', alignTop: 'Alinhar ao topo',
+  lipSync: 'Lip sync automático', alignLeft: 'Alinhar à esquerda', alignHCenter: 'Centro horizontal', alignRight: 'Alinhar à direita', alignTop: 'Alinhar ao topo',
   alignVCenter: 'Centro vertical', alignBottom: 'Alinhar à base', distributeH: 'Distribuir na horizontal', distributeV: 'Distribuir na vertical', matchWidth: 'Mesma largura',
   matchHeight: 'Mesma altura', resetRotation: 'Girar a vista para 0°', toggleRulers: 'Réguas', toggleGrid: 'Grade', toggleGuides: 'Guias', lockGuides: 'Travar guias',
   clearGuides: 'Limpar guias', gridSettings: 'Grade e guias', snapGrid: 'Encaixar na grade', snapGuides: 'Encaixar nas guias', snapObjects: 'Encaixar em objetos',
@@ -501,13 +503,15 @@ export function extendActions(actions, { editor: ed, stage, io, panels }) {
   });
 
   add('lipSync', [], async () => {
-    const it = ed.selectedItems().find((x) => x.el.type === 'instance');
+    const it = ed.selectedItems().find((x) => x.el.type === 'instance') || ed.switchItem();
     const sym = it && ed.symbol(it.el.symbolId);
-    if (!sym) return ed.toast('Selecione a instância da boca (um símbolo gráfico com um quadro para cada boca).');
+    if (!sym) return ed.toast('Selecione a boca: uma camada de troca, ou um símbolo gráfico com um quadro para cada boca.');
     const sounds = ed.doc.library.sounds;
     if (!sounds.length) return ed.toast('Importe a fala (Arquivo › Importar som) primeiro.');
-    const n = timelineLength(sym);
-    const opts = (def) => Array.from({ length: n }, (_, f) => `<option value="${f}" ${f === def ? 'selected' : ''}>Quadro ${f + 1}</option>`).join('');
+    const sw = isSwitch(sym);
+    // opções: os desenhos da troca (pelo nome) ou os quadros do símbolo
+    const choices = sw ? switchDrawings(sym).map((d) => ({ f: d.frame, label: d.name })) : Array.from({ length: timelineLength(sym) }, (_, f) => ({ f, label: `Quadro ${f + 1}` }));
+    const opts = (def) => choices.map((c) => `<option value="${c.f}" ${c.f === def ? 'selected' : ''}>${esc(c.label)}</option>`).join('');
     const layerSound = ed.layers.map((l) => l.frames.find((s) => s.sound)?.sound?.id).find(Boolean);
     const saved = (() => {
       try {
@@ -516,14 +520,19 @@ export function extendActions(actions, { editor: ed, stage, io, panels }) {
         return {};
       }
     })();
+    const auto = visemeMapFor(sym);
     const keys = Object.keys(VISEMES);
+    // fonema sem desenho próprio: a boca mais parecida que existe (M/B/P e F/V fecham; E abre como A; U como O)
+    const NEAR = { MBP: 'rest', FV: 'rest', S: 'rest', E: 'A', L: 'A', U: 'O', O: 'A', A: 'O' };
+    const def = (k, i) => auto[k] ?? saved[k] ?? auto[NEAR[k]] ?? choices[Math.min(i, choices.length - 1)].f;
     const r = await openDialog({
-      title: `Lip-sync automático: ${sym.name}`,
+      title: `Lip sync: ${sym.name}`,
       body: `<label class="dlg-row"><span>Fala</span><select name="snd">${sounds.map((s) => `<option value="${s.id}" ${s.id === layerSound ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
-        <p class="dlg-text">Diga qual quadro do símbolo tem cada boca. Os keyframes são criados nesta camada a partir do quadro atual (${ed.frame + 1}).</p>
-        <div class="ls-grid">${keys.map((k, i) => `<label><span>${esc(VISEMES[k])}</span><select name="v_${k}">${opts(saved[k] ?? Math.min(i, n - 1))}</select></label>`).join('')}</div>
+        <p class="dlg-text">Diga qual ${sw ? 'desenho' : 'quadro do símbolo'} é cada boca${sw ? ' (desenhos com nome de fonema, como "A", "O" ou "MBP", já vêm escolhidos)' : ''}. As chaves são criadas a partir do quadro atual (${ed.frame + 1}), cada uma com o fonema dela: clique direito na chave para trocar o fonema depois.</p>
+        <div class="ls-grid">${keys.map((k, i) => `<label><span>${esc(VISEMES[k])}</span><select name="v_${k}">${opts(def(k, i))}</select></label>`).join('')}</div>
         <label class="dlg-row"><span>Duração mínima (quadros)</span><input type="number" name="min" min="1" max="12" value="2"></label>
-        <label class="dlg-row"><span>Sensibilidade ao silêncio (%)</span><input type="number" name="sil" min="2" max="50" value="12"></label>`,
+        <label class="dlg-row"><span>Sensibilidade ao silêncio (%)</span><input type="number" name="sil" min="2" max="50" value="12"></label>
+        <label class="dlg-row"><span>Pôr a fala numa camada (ver a onda e ouvir ao arrastar)</span><input type="checkbox" name="speech" ${layerSound ? '' : 'checked'}></label>`,
       ok: 'Gerar',
     });
     if (!r) return;
@@ -546,8 +555,15 @@ export function extendActions(actions, { editor: ed, stage, io, panels }) {
       }
       actx.close?.();
       const segs = analyzeLipSync(mono, buf.sampleRate, ed.doc.fps, { minLength: Number(r.min), silence: Number(r.sil) / 100 });
-      ed.applyLipSync(it, segs.map((s) => ({ at: s.at, length: s.length, frame: map[s.viseme] ?? 0 })));
-      ed.toast(`Lip-sync: ${segs.length} trocas de boca em ${Math.round(buf.duration * ed.doc.fps)} quadros.`);
+      const at = ed.frame;
+      ed.group('Lip sync', () => {
+        if (JSON.stringify(sym.visemeMap || {}) !== JSON.stringify(map)) ed.setVisemeMap(sym.id, map);
+        const target = ed.frameItems({ editableOnly: false, multi: false }).find((x) => x.layer.id === it.layer.id && x.index === it.index) || it;
+        ed.applyLipSync(target, segs.map((s) => ({ at: s.at, length: s.length, frame: map[s.viseme] ?? 0, viseme: s.viseme })));
+        if (r.speech) ed.addSpeechLayer(snd.id, at, Math.ceil(buf.duration * ed.doc.fps));
+        ed.setFrame(at);
+      });
+      ed.toast(`Lip sync: ${segs.length} trocas de boca em ${Math.round(buf.duration * ed.doc.fps)} quadros.`);
     } catch (err) {
       ed.toast(`Não deu para analisar o som: ${err.message}`);
     } finally {
@@ -801,5 +817,6 @@ export function extendActions(actions, { editor: ed, stage, io, panels }) {
     if (await confirmDialog('Layout padrão', 'Volta os painéis para o lugar de fábrica.', 'Restaurar')) panels.resetLayout();
   });
 
+  extendSwitchActions(actions, { editor: ed, labels: ACTION_LABELS });
   actions.rebuildKeymap();
 }

@@ -12,7 +12,7 @@ import * as TL from '../model/timeline.js';
 import { clone, uid, cloneElementsWithNewIds } from '../model/document.js';
 import { elementLocalBounds } from '../model/geometry.js';
 import { applyPoint, multiply, invert, IDENTITY, getSpanAt } from '../player/render.js';
-import { solveBones, lerpPose, orderedBones, smartWeights } from '../player/bones.js';
+import { solveBones, lerpPose, orderedBones, smartWeights, smartPose } from '../player/bones.js';
 import { distToSegment } from '../player/geom.js';
 import { applyEase } from '../player/ease.js';
 
@@ -164,7 +164,7 @@ P.poseAt = function (layer = this.activeLayer, frame = this.frame) {
 /** Ossos resolvidos na pose do quadro (espaço da camada). */
 P.rigSolved = function () {
   const info = this.poseAt();
-  return info ? solveBones(info.arm, info.pose) : new Map();
+  return info ? solveBones(info.arm, smartPose(info.arm, info.pose)) : new Map();
 };
 
 // ---------- edição do rig (vale para a camada toda) ----------
@@ -577,6 +577,37 @@ P.setSmartOffset = function (id, key, pk, d, opts = {}) {
         return { ...c, shapes };
       }),
     }),
+  });
+};
+
+/**
+ * Soma giros de outros ossos a uma correção (deltas = { id: giro em rad, já dividido pelo peso }).
+ * Gravado girando outro osso enquanto a correção está em edição.
+ */
+P.addSmartBoneDeltas = function (id, deltas) {
+  return this.editRig('Correção gira osso', null, null, {
+    arm: (ex) => ({
+      ...ex,
+      smart: (ex.smart || []).map((c) => {
+        if (c.id !== id) return c;
+        const bones = { ...(c.bones || {}) };
+        for (const [b, d] of Object.entries(deltas)) {
+          const v = (bones[b] || 0) + d;
+          if (Math.abs(v) < 1e-4) delete bones[b];
+          else bones[b] = Math.round(v * 1e5) / 1e5;
+        }
+        const out = { ...c, bones };
+        if (!Object.keys(bones).length) delete out.bones;
+        return out;
+      }),
+    }),
+  });
+};
+
+/** Tira os giros de outros ossos da correção (fica só o ajuste dos pontos). */
+P.clearSmartBones = function (id) {
+  return this.editRig('Tirar giros da correção', null, null, {
+    arm: (ex) => ({ ...ex, smart: (ex.smart || []).map((c) => (c.id === id ? (({ bones, ...rest }) => rest)(c) : c)) }),
   });
 };
 

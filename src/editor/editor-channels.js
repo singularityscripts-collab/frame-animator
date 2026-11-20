@@ -109,6 +109,7 @@ export function layerChannels(layer, editor = null) {
   add('points', 'Pontos', '#30d158', changed((s) => pick(s.elements, (e) => (e.type === 'shape' ? e.path : null))));
   add('color', 'Cor', '#ff9f0a', changed((s) => pick(s.elements, (e) => [e.fill, e.stroke, e.strokeWidth, e.color, e.alpha])));
   add('visible', 'Esconder', '#8e8e93', changed((s) => pick(s.elements, (e) => !!e.hidden)));
+  add('drawing', 'Desenho (troca)', '#9be29b', changed((s) => pick(s.elements, (e) => (e.type === 'instance' ? e.firstFrame || 0 : null))));
   // ossos: um canal por osso (e a raiz), com as chaves em que o giro muda
   const bones = fr.find((s) => s.armature?.bones?.length)?.armature.bones || [];
   for (const b of [{ id: '__root', name: 'Raiz (posição)' }, ...bones]) {
@@ -177,10 +178,24 @@ P.setLayerModifiers = function (layerId, patch, label = 'Modificadores') {
 P.cycleFromSelection = function (mode = 'loop') {
   const r = this.hasFrameRange() ? this.frameRange() : { from: 0, to: this.frame };
   if (r.to <= r.from) return this.toast('Selecione na timeline os quadros que vão repetir (pelo menos 2).');
-  for (const layer of this.hasFrameRange() ? this.rangeLayers(r) : [this.activeLayer]) {
-    this.setLayerModifiers(layer.id, { cycle: { from: r.from, to: r.to, mode } }, mode === 'pingpong' ? 'Ciclo vai e volta' : 'Ciclo');
-  }
-  this.toast(`Depois do quadro ${r.to + 1}, os quadros ${r.from + 1}–${r.to + 1} ${mode === 'pingpong' ? 'vão e voltam' : 'se repetem'}. Estenda a camada (F5) para ver.`);
+  const len = r.to - r.from + 1;
+  // a camada precisa de quadros depois do trecho para o ciclo aparecer: estende até o fim da cena
+  // (ou três voltas, se a cena acaba antes)
+  const until = Math.max(this.length, r.to + 1 + len * 3);
+  let extended = false;
+  this.group(mode === 'pingpong' ? 'Ciclo vai e volta' : 'Ciclo', () => {
+    for (const layer of this.hasFrameRange() ? this.rangeLayers(r) : [this.activeLayer]) {
+      this.setLayerModifiers(layer.id, { cycle: { from: r.from, to: r.to, mode } }, mode === 'pingpong' ? 'Ciclo vai e volta' : 'Ciclo');
+      const L = this.layer(layer.id);
+      if (TL.lengthOf(L.frames) <= r.to + 1) {
+        const fr = clone(L.frames);
+        fr[fr.length - 1].duration += until - TL.lengthOf(fr);
+        this.run(new C.SetLayerFrames(L.id, L.frames, fr, 'Ciclo'));
+        extended = true;
+      }
+    }
+  });
+  this.toast(`Depois do quadro ${r.to + 1}, os quadros ${r.from + 1}–${r.to + 1} ${mode === 'pingpong' ? 'vão e voltam' : 'se repetem'}.${extended ? ` A camada foi até o quadro ${until} para o ciclo aparecer.` : ''}`);
 };
 
 // ---------- retime: esticar ou encolher um trecho ----------

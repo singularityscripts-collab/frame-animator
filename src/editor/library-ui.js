@@ -76,6 +76,9 @@ export class LibraryUI {
           { label: 'Nova pasta', run: () => this.newFolder() },
           { label: 'Importar som…', run: () => actions.importSound() },
           { label: 'Importar imagem…', run: () => actions.run('importImage') },
+          '-',
+          { label: 'Personagens…', run: () => actions.run('characterLibrary') },
+          { label: 'Importar personagem…', run: () => actions.run('importCharacter') },
         ]);
       }
     });
@@ -211,6 +214,9 @@ export class LibraryUI {
         { label: 'Renomear', run: () => this.rename(row, 'items', s) },
         { label: 'Propriedades…', run: () => this.properties(s.id) },
         { label: 'Duplicar', run: () => this.editor.duplicateSymbol(s.id) },
+        '-',
+        { label: 'Salvar como personagem', run: () => this.editor.saveCharacterToLibrary?.(s.id) },
+        { label: 'Exportar personagem…', run: () => this.editor.exportCharacterFile?.(s.id) },
         '-',
         { label: 'Apagar', run: () => this.remove('items', s.id) },
       ]);
